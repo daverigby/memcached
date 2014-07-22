@@ -360,13 +360,16 @@ IF(${COUCHBASE_PYTHON})
     ADD_TEST(memcached-breakdancer-engine-tests engine_testapp -E default_engine.so -T memcached_generated_testsuite.so)
 ENDIF(${COUCHBASE_PYTHON})
 
-IF ("${MEMORY_ALLOCATOR}" STREQUAL "tcmalloc")
+IF (("${MEMORY_ALLOCATOR}" STREQUAL "tcmalloc") OR
+    ("${MEMORY_ALLOCATOR}" STREQUAL "jemalloc"))
    ADD_EXECUTABLE(memcached_tcmalloc_test daemon/alloc_hooks.c
                                           daemon/alloc_hooks.h
+                                          utilities/extension_loggers.c
                                           tests/tcmalloc_test.cc)
-   TARGET_LINK_LIBRARIES(memcached_tcmalloc_test platform ${TCMALLOC_LIBRARIES})
+   TARGET_LINK_LIBRARIES(memcached_tcmalloc_test platform ${MALLOC_LIBRARIES})
    ADD_TEST(memcached-tcmalloc-hooks memcached_tcmalloc_test)
-ENDIF ("${MEMORY_ALLOCATOR}" STREQUAL "tcmalloc")
+ENDIF (("${MEMORY_ALLOCATOR}" STREQUAL "tcmalloc") OR
+       ("${MEMORY_ALLOCATOR}" STREQUAL "jemalloc"))
 
 CONFIGURE_FILE(tests/cert/testapp.pem tests/cert/testapp.pem COPYONLY)
 CONFIGURE_FILE(tests/cert/testapp.cert tests/cert/testapp.cert COPYONLY)

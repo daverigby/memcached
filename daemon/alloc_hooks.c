@@ -30,22 +30,6 @@ static alloc_hooks_type type = none;
 
 #ifdef HAVE_JEMALLOC
 
-static int jemalloc_addrem_new_hook(void (*hook)(const void *ptr, size_t size)) {
-    (void)hook;
-    /* JEMalloc provides memory tracking, but not via add/remove hooks - so
-     * just return success here even though we haven't registered any callbacks.
-     */
-    return 1;
-}
-
-static int jemalloc_addrem_del_hook(void (*hook)(const void *ptr)) {
-    (void)hook;
-    /* JEMalloc provides memory tracking, but not via add/remove hooks - so
-     * just return success here even though we haven't registered any callbacks.
-     */
-    return 1;
-}
-
 static int jemalloc_get_stats_prop(const char* property, size_t* value) {
     size_t size = sizeof(*value);
     return je_mallctl(property, value, &size, NULL, 0);
@@ -97,10 +81,10 @@ static void jemalloc_release_free_memory(void) {
 }
 
 static void init_no_hooks(void) {
-    addNewHook = jemalloc_addrem_new_hook;
-    removeNewHook = jemalloc_addrem_new_hook;
-    addDelHook = jemalloc_addrem_del_hook;
-    removeDelHook = jemalloc_addrem_del_hook;
+    addNewHook = je_add_new_hook;
+    removeNewHook = je_remove_new_hook;
+    addDelHook = je_add_delete_hook;
+    removeDelHook = je_remove_delete_hook;
     getStatsProp = jemalloc_get_stats_prop;
     getAllocSize = jemalloc_get_alloc_size;
     getDetailedStats = jemalloc_get_detailed_stats;
