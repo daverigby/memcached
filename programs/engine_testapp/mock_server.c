@@ -34,6 +34,25 @@ uint8_t session_ctr;
 cb_mutex_t session_mutex;
 
 /**
+ * LOG API FUNCTIONS
+ */
+
+static EXTENSION_LOGGER_DESCRIPTOR* mock_get_logger(void)
+{
+    return stderr_logger;
+}
+
+static EXTENSION_LOG_LEVEL mock_get_log_level(void)
+{
+    return EXTENSION_LOG_DETAIL;
+}
+
+static void mock_set_log_level(EXTENSION_LOG_LEVEL severity)
+{
+    // TODO
+}
+
+/**
  * SERVER CORE API FUNCTIONS
  */
 
@@ -346,6 +365,7 @@ static void mock_get_detailed_stats(char* buffer, int size) {
 SERVER_HANDLE_V1 *get_mock_server_api(void)
 {
    static SERVER_CORE_API core_api;
+   static SERVER_LOG_API log_api;
    static SERVER_COOKIE_API server_cookie_api;
    static SERVER_STAT_API server_stat_api;
    static SERVER_EXTENSION_API extension_api;
@@ -361,6 +381,10 @@ SERVER_HANDLE_V1 *get_mock_server_api(void)
       core_api.get_current_time = mock_get_current_time;
       core_api.abstime = mock_abstime;
       core_api.parse_config = mock_parse_config;
+
+      log_api.get_logger = mock_get_logger;
+      log_api.get_level = mock_get_log_level;
+      log_api.set_level = mock_set_log_level;
 
       server_cookie_api.get_auth_data = mock_get_auth_data;
       server_cookie_api.store_engine_specific = mock_store_engine_specific;
@@ -399,6 +423,7 @@ SERVER_HANDLE_V1 *get_mock_server_api(void)
       rv.stat = &server_stat_api;
       rv.extension = &extension_api;
       rv.callback = &callback_api;
+      rv.log = &log_api;
       rv.cookie = &server_cookie_api;
       rv.alloc_hooks = &hooks_api;
    }
