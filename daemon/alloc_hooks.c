@@ -77,7 +77,34 @@ static void jemalloc_get_detailed_stats(char *buffer, int nbuffer) {
 }
 
 static void jemalloc_release_free_memory(void) {
-    return;
+    /* Note: jemalloc doesn't necessarily free this memory immediately, but it
+     * will schedule to be freed as soon as is possible.
+     */
+    unsigned narenas;
+    size_t mib[3];
+    size_t len, miblen;
+
+    /* lookup current number of arenas, then use that to invoke
+     * 'arenas.NARENAS.purge' to release any dirty pages back to the OS.
+     */
+    len = sizeof(narenas);
+    if (je_mallctl("arenas.narenas", &narenas, &len, NULL, 0) != 0) {
+        get_stderr_logger()->log(EXTENSION_LOG_WARNING, NULL,
+                                 "jemalloc_release_free_memory() failed - could not determine narenas.");
+        return;
+    }
+    miblen = 3;
+    if (je_mallctlnametomib("arena.0.purge", mib, &miblen) != 0) {
+        get_stderr_logger()->log(EXTENSION_LOG_WARNING, NULL,
+                                 "jemalloc_release_free_memory() failed - could not lookup MIB.");
+        return;
+    }
+    mib[1] = narenas;
+    if (je_mallctlbymib(mib, miblen, NULL, 0, NULL, 0) != 0) {
+        get_stderr_logger()->log(EXTENSION_LOG_WARNING, NULL,
+                                 "jemalloc_release_free_memory() failed - could not invoke arenas.N.purge.");
+        return;
+    }
 }
 
 static void init_no_hooks(void) {
