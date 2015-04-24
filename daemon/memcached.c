@@ -5251,6 +5251,7 @@ static void setup_bin_packet_handlers(void) {
 
     validators[PROTOCOL_BINARY_CMD_SUBDOC_GET] = subdoc_get_exists_validator;
     validators[PROTOCOL_BINARY_CMD_SUBDOC_EXISTS] = subdoc_get_exists_validator;
+    validators[PROTOCOL_BINARY_CMD_SUBDOC_DICT_ADD] = subdoc_dict_add_validator;
 
     validators[PROTOCOL_BINARY_CMD_SETQ] = set_replace_validator;
     validators[PROTOCOL_BINARY_CMD_SET] = set_replace_validator;
@@ -5334,6 +5335,7 @@ static void setup_bin_packet_handlers(void) {
 
     executors[PROTOCOL_BINARY_CMD_SUBDOC_GET] = subdoc_get_executor;
     executors[PROTOCOL_BINARY_CMD_SUBDOC_EXISTS] = subdoc_exists_executor;
+    executors[PROTOCOL_BINARY_CMD_SUBDOC_DICT_ADD] = subdoc_dict_add_executor;
 
 }
 

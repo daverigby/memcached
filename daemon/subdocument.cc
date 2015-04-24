@@ -43,7 +43,10 @@ struct Cmd2Type
  * the individual implementations using generic building blocks:
  *
  *   optype: The subjson API optype for this command.
- *   response_has_value: Does the command response include a value?
+ *   request_has_value: Does the command request require a value?
+ *   response_has_value: Does the command response require a value?
+ *   is_mutator: Does the command mutate (modify) the document?
+ *   valid_flags: What flags are valid for this command.
  */
 template <typename T>
 struct cmd_traits;
@@ -51,13 +54,30 @@ struct cmd_traits;
 template <>
 struct cmd_traits<Cmd2Type<PROTOCOL_BINARY_CMD_SUBDOC_GET> > {
   static const subdoc_OPTYPE optype = SUBDOC_CMD_GET;
+  static const bool request_has_value = false;
   static const bool response_has_value = true;
+  static const bool is_mutator = false;
+  static const protocol_binary_subdoc_flag valid_flags =
+      protocol_binary_subdoc_flag(0);
 };
 
 template <>
 struct cmd_traits<Cmd2Type<PROTOCOL_BINARY_CMD_SUBDOC_EXISTS> > {
   static const subdoc_OPTYPE optype = SUBDOC_CMD_EXISTS;
+  static const bool request_has_value = false;
   static const bool response_has_value = false;
+  static const bool is_mutator = false;
+  static const protocol_binary_subdoc_flag valid_flags =
+      protocol_binary_subdoc_flag(0);
+};
+
+template <>
+struct cmd_traits<Cmd2Type<PROTOCOL_BINARY_CMD_SUBDOC_DICT_ADD> > {
+  static const subdoc_OPTYPE optype = SUBDOC_CMD_DICT_ADD;
+  static const bool request_has_value = true;
+  static const bool response_has_value = false;
+  static const bool is_mutator = true;
+  static const protocol_binary_subdoc_flag valid_flags = SUBDOC_FLAG_MKDIR_P;
 };
 
 /*
@@ -82,9 +102,25 @@ static int subdoc_validator(void* packet) {
         (keylen == 0) ||
         (extlen != sizeof(uint16_t) + sizeof(uint8_t)) ||
         (pathlen == 0) || (pathlen > SUBDOC_PATH_MAX_LENGTH) ||
-        (subdoc_flags != 0) ||
-        (valuelen != 0) ||
         (header->request.datatype != PROTOCOL_BINARY_RAW_BYTES)) {
+        return -1;
+    }
+
+    // Now command-trait specific stuff:
+
+    // valuelen should be non-zero iff the request has a value.
+    if (cmd_traits<Cmd2Type<CMD> >::request_has_value) {
+        if (valuelen == 0) {
+            return -1;
+        }
+    } else {
+        if (valuelen != 0) {
+            return -1;
+        }
+    }
+
+    // Check only valid flags are specified.
+    if ((subdoc_flags & ~cmd_traits<Cmd2Type<CMD> >::valid_flags) != 0) {
         return -1;
     }
 
@@ -93,6 +129,10 @@ static int subdoc_validator(void* packet) {
 
 int subdoc_get_exists_validator(void* packet) {
     return subdoc_validator<PROTOCOL_BINARY_CMD_SUBDOC_GET>(packet);
+}
+
+int subdoc_dict_add_validator(void* packet) {
+    return subdoc_validator<PROTOCOL_BINARY_CMD_SUBDOC_DICT_ADD>(packet);
 }
 
 /******************************************************************************
@@ -114,7 +154,15 @@ struct SubdocCmdContext {
     SubdocCmdContext(void* c)
       : cookie(c),
         in_doc({NULL, 0}),
-        in_cas(0) {}
+        in_cas(0),
+        doc_new_len(0),
+        out_doc(NULL) {}
+
+    ~SubdocCmdContext() {
+        if (out_doc != NULL) {
+            settings.engine.v1->release(settings.engine.v0, cookie, out_doc);
+        }
+    }
 
     // Static method passed back to memcached to destroy objects of this class.
     static void dtor(conn* c, void* context);
@@ -131,6 +179,15 @@ struct SubdocCmdContext {
     // CAS value of the input document. Required to ensure we only store a
     // new document which was derived from the same original input document.
     uint64_t in_cas;
+
+    // Location of the fragments consisting of the _new_ value.
+    subdoc_LOC doc_new[8];
+    // Number of fragments active.
+    size_t doc_new_len;
+
+    // [Mutations only] New item to store into engine. _Must_ be released
+    // back to the engine using ENGINE_HANDLE_V1::release()
+    item* out_doc;
 };
 
 /*
@@ -141,7 +198,11 @@ static bool subdoc_fetch(conn* c, ENGINE_ERROR_CODE ret, const char* key,
                          size_t keylen, uint16_t vbucket);
 template<protocol_binary_command CMD>
 static bool subdoc_operate(conn* c, const char* path, size_t pathlen,
-                           const char* value, size_t vallen);
+                           const char* value, size_t vallen,
+                           protocol_binary_subdoc_flag flags);
+template<protocol_binary_command CMD>
+static bool subdoc_update(conn* c, ENGINE_ERROR_CODE ret, const char* key,
+                          size_t keylen, uint16_t vbucket);
 template<protocol_binary_command CMD>
 static void subdoc_response(conn* c);
 
@@ -150,7 +211,7 @@ static void subdoc_response(conn* c);
  */
 
 /* Main template function which handles execution of all sub-document
- * commands: fetches, operates on, and responds to the client.
+ * commands: fetches, operates on, updates and finally responds to the client.
  *
  * Invoked via extern "C" trampoline functions (see later) which populate the
  * subdocument elements of executors[].
@@ -171,6 +232,8 @@ void subdoc_executor(conn *c, const void *packet) {
     const uint16_t keylen = ntohs(header->request.keylen);
     const uint32_t bodylen = ntohl(header->request.bodylen);
     const uint16_t pathlen = ntohs(req->message.extras.pathlen);
+    const protocol_binary_subdoc_flag flags =
+            static_cast<protocol_binary_subdoc_flag>(req->message.extras.subdoc_flags);
     const uint16_t vbucket = ntohs(header->request.vbucket);
 
     const char* key = (char*)packet + sizeof(*header) + extlen;
@@ -207,11 +270,16 @@ void subdoc_executor(conn *c, const void *packet) {
     }
 
     // 2. Perform the operation specified by CMD. Again, return if it fails.
-    if (!subdoc_operate<CMD>(c, path, pathlen, value, vallen)) {
+    if (!subdoc_operate<CMD>(c, path, pathlen, value, vallen, flags)) {
         return;
     }
 
-    // 3. Form a response and send it back to the client.
+    // 3. Update the document in the engine (mutations only).
+    if (!subdoc_update<CMD>(c, ret, key, keylen, vbucket)) {
+        return;
+    }
+
+    // 4. Form a response and send it back to the client.
     subdoc_response<CMD>(c);
 }
 
@@ -333,7 +401,7 @@ get_document_for_searching(conn* c, const item* item,
 }
 
 // Destructor function for SubdocCmdContext objects. Needed so we can cleanup
-// any resources used while executing a subdocument command, by setting
+// any resouces used while executing a subdocument command, by setting
 // c->cmd_context and c->cmd_context_dtor.
 static void subdoc_context_dtor(void* context) {
     SubdocCmdContext* subdoc_context =
@@ -388,7 +456,8 @@ static bool subdoc_fetch(conn* c, ENGINE_ERROR_CODE ret, const char* key,
 // else false.
 template<protocol_binary_command CMD>
 static bool subdoc_operate(conn* c, const char* path, size_t pathlen,
-                           const char* value, size_t vallen) {
+                           const char* value, size_t vallen,
+                           protocol_binary_subdoc_flag flags) {
     SubdocCmdContext* context =
             reinterpret_cast<SubdocCmdContext*>(c->cmd_context);
     cb_assert(context != NULL);
@@ -411,8 +480,15 @@ static bool subdoc_operate(conn* c, const char* path, size_t pathlen,
         // Prepare the specified sub-document command.
         subdoc_OPERATION* op = c->thread->subdoc_op;
         subdoc_op_clear(op);
-        SUBDOC_OP_SETCODE(op, cmd_traits<Cmd2Type<CMD>>::optype);
+        subdoc_OPTYPE opcode = cmd_traits<Cmd2Type<CMD>>::optype;
+        if ((flags & SUBDOC_FLAG_MKDIR_P) == SUBDOC_FLAG_MKDIR_P) {
+            opcode = subdoc_OPTYPE(opcode | SUBDOC_CMD_FLAG_MKDIR_P);
+        }
+        SUBDOC_OP_SETCODE(op, opcode);
         SUBDOC_OP_SETDOC(op, doc.buf, doc.len);
+        if (cmd_traits<Cmd2Type<CMD>>::request_has_value) {
+            SUBDOC_OP_SETVALUE(op, value, vallen);
+        }
 
         // ... and execute it.
         subdoc_ERRORS subdoc_res = subdoc_op_exec(op, path, pathlen);
@@ -423,7 +499,10 @@ static bool subdoc_operate(conn* c, const char* path, size_t pathlen,
             // subdoc.
             context->in_doc = doc;
             context->in_cas = cas;
-            c->cas = context->in_cas;
+            context->doc_new_len = op->doc_new_len;
+            for (unsigned int i = 0; i < op->doc_new_len; i++) {
+                context->doc_new[i] = op->doc_new[i];
+            }
             break;
 
         case SUBDOC_STATUS_PATH_ENOENT:
@@ -442,15 +521,128 @@ static bool subdoc_operate(conn* c, const char* path, size_t pathlen,
             write_bin_packet(c, PROTOCOL_BINARY_RESPONSE_SUBDOC_PATH_EINVAL);
             return false;
 
+        case SUBDOC_STATUS_DOC_EEXISTS:
+            write_bin_packet(c, PROTOCOL_BINARY_RESPONSE_SUBDOC_PATH_EEXISTS);
+            return false;
+
         case SUBDOC_STATUS_PATH_E2BIG:
             write_bin_packet(c, PROTOCOL_BINARY_RESPONSE_SUBDOC_PATH_E2BIG);
             return false;
 
+        case SUBDOC_STATUS_VALUE_CANTINSERT:
+            write_bin_packet(c, PROTOCOL_BINARY_RESPONSE_SUBDOC_VALUE_CANTINSERT);
+            return false;
+
         default:
             // TODO: handle remaining errors.
+            settings.extensions.logger->log(EXTENSION_LOG_DEBUG, c,
+                                            "Unexpected response from subdoc: %d (0x%x)", subdoc_res, subdoc_res);
             write_bin_packet(c, PROTOCOL_BINARY_RESPONSE_EINTERNAL);
             return false;
         }
+    }
+
+    return true;
+}
+
+// Update the engine with whatever modifications the subdocument command made
+// to the document.
+// Returns true if the updare was successful (and execution should continue),
+// else false.
+template<protocol_binary_command CMD>
+bool subdoc_update(conn* c, ENGINE_ERROR_CODE ret, const char* key,
+                   size_t keylen, uint16_t vbucket) {
+    SubdocCmdContext* context =
+            reinterpret_cast<SubdocCmdContext*>(c->cmd_context);
+    cb_assert(context != NULL);
+
+    if (!cmd_traits<Cmd2Type<CMD>>::is_mutator) {
+        // No update required - just make sure we have the correct cas to use
+        // for resposne.
+        c->cas = context->in_cas;
+        return true;
+    }
+
+    // Calculate the updated document length.
+    size_t new_doc_len = 0;
+    for (size_t ii = 0; ii < context->doc_new_len; ii++) {
+        const subdoc_LOC& loc = context->doc_new[ii];
+        new_doc_len += loc.length;
+    }
+
+    // Allocate a new item of this size.
+    if (context->out_doc == NULL) {
+        item *new_doc;
+
+        if (ret == ENGINE_SUCCESS) {
+            ret = settings.engine.v1->allocate(settings.engine.v0, c, &new_doc,
+                                               key, keylen, new_doc_len, 0, 0,
+                                               PROTOCOL_BINARY_DATATYPE_JSON);
+        }
+
+        switch (ret) {
+        case ENGINE_SUCCESS:
+            // Save the allocated document in the cmd context.
+            context->out_doc = new_doc;
+            break;
+
+        case ENGINE_EWOULDBLOCK:
+            c->ewouldblock = true;
+            return false;
+
+        case ENGINE_DISCONNECT:
+            conn_set_state(c, conn_closing);
+            return false;
+
+        default:
+            write_bin_packet(c, engine_error_2_protocol_error(ret));
+            return false;
+        }
+
+        // To ensure we only replace the version of the document we
+        // just appended to; set the CAS to the one retrieved from.
+        settings.engine.v1->item_set_cas(settings.engine.v0, c,
+                                         new_doc, context->in_cas);
+
+        // Obtain the item info (and it's iovectors)
+        item_info new_doc_info;
+        new_doc_info.nvalue = IOV_MAX;
+        if (!settings.engine.v1->get_item_info(settings.engine.v0, c,
+                                               new_doc, &new_doc_info)) {
+            // TODO: free everything!!
+            write_bin_packet(c, PROTOCOL_BINARY_RESPONSE_EINTERNAL);
+            return false;
+        }
+
+        // Copy the new document into the item.
+        char* write_ptr = static_cast<char*>(new_doc_info.value[0].iov_base);
+        for (size_t ii = 0; ii < context->doc_new_len; ii++) {
+            const subdoc_LOC& loc = context->doc_new[ii];
+            std::memcpy(write_ptr, loc.at, loc.length);
+            write_ptr += loc.length;
+        }
+    }
+
+    // And finally, store the new document.
+    uint64_t new_cas;
+    ret = settings.engine.v1->store(settings.engine.v0, c,
+                                    context->out_doc, &new_cas,
+                                    OPERATION_REPLACE, vbucket);
+    switch (ret) {
+    case ENGINE_SUCCESS:
+        c->cas = new_cas;
+        break;
+
+    case ENGINE_EWOULDBLOCK:
+        c->ewouldblock = true;
+        return false;
+
+    case ENGINE_DISCONNECT:
+        c->state = conn_closing;
+        return false;
+    default:
+        write_bin_packet(c, engine_error_2_protocol_error(ret));
+        return false;
     }
 
     return true;
@@ -492,4 +684,8 @@ void subdoc_get_executor(conn *c, void* packet) {
 
 void subdoc_exists_executor(conn *c, void* packet) {
     return subdoc_executor<PROTOCOL_BINARY_CMD_SUBDOC_EXISTS>(c, packet);
+}
+
+void subdoc_dict_add_executor(conn *c, void *packet) {
+    return subdoc_executor<PROTOCOL_BINARY_CMD_SUBDOC_DICT_ADD>(c, packet);
 }
