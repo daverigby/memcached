@@ -694,21 +694,39 @@ enum test_return test_subdoc_dict_add_deep() {
 
     // a). Check that we can add elements to a document at the maximum nested
     // level.
-    unique_cJSON_ptr max_dict(make_nested_dict(MAX_SUBDOC_PATH_COMPONENTS));
-    char* max_dict_str = cJSON_PrintUnformatted(max_dict.get());
-    cb_assert(store_object("max_dict", max_dict_str) == TEST_PASS);
-    cJSON_Free(max_dict_str);
+    unique_cJSON_ptr one_less_max_dict(
+            make_nested_dict(MAX_SUBDOC_PATH_COMPONENTS - 1));
+    char* one_less_max_dict_str = cJSON_PrintUnformatted(one_less_max_dict.get());
+    cb_assert(store_object("dict", one_less_max_dict_str) == TEST_PASS);
+    cJSON_Free(one_less_max_dict_str);
 
-    std::string valid_max_path(std::to_string(1));
-    for (int depth = 2; depth < MAX_SUBDOC_PATH_COMPONENTS; depth++) {
-        valid_max_path += std::string(".") + std::to_string(depth);
+    std::string one_less_max_path(std::to_string(1));
+    for (int depth = 2; depth < MAX_SUBDOC_PATH_COMPONENTS - 1; depth++) {
+        one_less_max_path += std::string(".") + std::to_string(depth);
     }
     // Check precondition - should have an empty dict we can access.
-    expect_subdoc_cmd(SubdocCmd(PROTOCOL_BINARY_CMD_SUBDOC_GET, "max_dict",
-                                valid_max_path),
+    expect_subdoc_cmd(SubdocCmd(PROTOCOL_BINARY_CMD_SUBDOC_GET, "dict",
+                                one_less_max_path),
                       PROTOCOL_BINARY_RESPONSE_SUCCESS, "{}");
 
-    delete_object("max_dict");
+    // a). Check we can add primitive elements to this path.
+    const std::vector<std::pair<std::string, std::string>> primitive_key_vals({
+            {"int", "2"},
+            {"float", "2.0"},
+            {"true", "true"},
+            {"false", "false"},
+            {"null", "null"}});
+    for (const auto& kv : primitive_key_vals) {
+        const auto key = one_less_max_path + "." + kv.first;
+        expect_subdoc_cmd(SubdocCmd(PROTOCOL_BINARY_CMD_SUBDOC_DICT_ADD,
+                                    "dict", key, kv.second),
+                          PROTOCOL_BINARY_RESPONSE_SUCCESS, "");
+        expect_subdoc_cmd(SubdocCmd(PROTOCOL_BINARY_CMD_SUBDOC_GET, "dict",
+                                    key),
+                          PROTOCOL_BINARY_RESPONSE_SUCCESS, kv.second);
+    }
+
+    delete_object("dict");
 
     return TEST_PASS;
 }
