@@ -80,6 +80,15 @@ struct cmd_traits<Cmd2Type<PROTOCOL_BINARY_CMD_SUBDOC_DICT_ADD> > {
   static const protocol_binary_subdoc_flag valid_flags = SUBDOC_FLAG_MKDIR_P;
 };
 
+template <>
+struct cmd_traits<Cmd2Type<PROTOCOL_BINARY_CMD_SUBDOC_DICT_UPSERT> > {
+  static const subdoc_OPTYPE optype = SUBDOC_CMD_DICT_UPSERT;
+  static const bool request_has_value = true;
+  static const bool response_has_value = false;
+  static const bool is_mutator = true;
+  static const protocol_binary_subdoc_flag valid_flags = SUBDOC_FLAG_MKDIR_P;
+};
+
 /*
  * Subdocument command validators
  */
@@ -131,7 +140,9 @@ int subdoc_get_exists_validator(void* packet) {
     return subdoc_validator<PROTOCOL_BINARY_CMD_SUBDOC_GET>(packet);
 }
 
-int subdoc_dict_add_validator(void* packet) {
+// Validates DICT_ADD and DICT_UPSERT commands (they require exactly the same
+// validation).
+int subdoc_dict_add_upsert_validator(void* packet) {
     return subdoc_validator<PROTOCOL_BINARY_CMD_SUBDOC_DICT_ADD>(packet);
 }
 
@@ -688,4 +699,8 @@ void subdoc_exists_executor(conn *c, void* packet) {
 
 void subdoc_dict_add_executor(conn *c, void *packet) {
     return subdoc_executor<PROTOCOL_BINARY_CMD_SUBDOC_DICT_ADD>(c, packet);
+}
+
+void subdoc_dict_upsert_executor(conn *c, void *packet) {
+    return subdoc_executor<PROTOCOL_BINARY_CMD_SUBDOC_DICT_UPSERT>(c, packet);
 }
