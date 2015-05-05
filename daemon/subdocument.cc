@@ -89,6 +89,16 @@ struct cmd_traits<Cmd2Type<PROTOCOL_BINARY_CMD_SUBDOC_DICT_UPSERT> > {
   static const protocol_binary_subdoc_flag valid_flags = SUBDOC_FLAG_MKDIR_P;
 };
 
+template <>
+struct cmd_traits<Cmd2Type<PROTOCOL_BINARY_CMD_SUBDOC_DELETE> > {
+  static const subdoc_OPTYPE optype = SUBDOC_CMD_DELETE;
+  static const bool request_has_value = true;
+  static const bool response_has_value = false;
+  static const bool is_mutator = true;
+  static const protocol_binary_subdoc_flag valid_flags =
+          protocol_binary_subdoc_flag(0);
+};
+
 /*
  * Subdocument command validators
  */
@@ -136,7 +146,8 @@ static int subdoc_validator(void* packet) {
     return 0;
 }
 
-int subdoc_get_exists_validator(void* packet) {
+/* Validates GET, EXISTS and DELETE commands */
+int subdoc_get_exists_delete_validator(void* packet) {
     return subdoc_validator<PROTOCOL_BINARY_CMD_SUBDOC_GET>(packet);
 }
 
@@ -703,4 +714,8 @@ void subdoc_dict_add_executor(conn *c, void *packet) {
 
 void subdoc_dict_upsert_executor(conn *c, void *packet) {
     return subdoc_executor<PROTOCOL_BINARY_CMD_SUBDOC_DICT_UPSERT>(c, packet);
+}
+
+void subdoc_delete_executor(conn *c, void *packet) {
+    return subdoc_executor<PROTOCOL_BINARY_CMD_SUBDOC_DELETE>(c, packet);
 }

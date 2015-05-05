@@ -755,3 +755,41 @@ enum test_return test_subdoc_dict_add_deep() {
 
     return TEST_PASS;
 }
+
+enum test_return test_subdoc_delete_simple() {
+
+    // a). Create a document containing each of the primitive types, and then
+    // ensure we can successfully delete each type.
+    const char dict[] = "{"
+            "\"0\": 1,"
+            "\"1\": 2.0,"
+            "\"2\": 3.141e3,"
+            "\"3\": \"four\","
+            "\"4\": {\"foo\": \"bar\"},"
+            "\"5\": [1, 1, 1, 1],"
+            "\"6\": true,"
+            "\"7\": false"
+            "}";
+    store_object("dict", dict, /*JSON*/true, /*compress*/false);
+
+    for (unsigned int ii = 0; ii < 8; ii++) {
+        // Assert we can access it initially:
+        std::string path(std::to_string(ii));
+        expect_subdoc_cmd(SubdocCmd(PROTOCOL_BINARY_CMD_SUBDOC_EXISTS, "dict",
+                                    path),
+                          PROTOCOL_BINARY_RESPONSE_SUCCESS, "");
+        // Should be able to delete:
+        expect_subdoc_cmd(SubdocCmd(PROTOCOL_BINARY_CMD_SUBDOC_DELETE, "dict",
+                                    path),
+                          PROTOCOL_BINARY_RESPONSE_SUCCESS, "");
+        // ... and should no longer exist:
+        expect_subdoc_cmd(SubdocCmd(PROTOCOL_BINARY_CMD_SUBDOC_EXISTS, "dict",
+                                    path),
+                          PROTOCOL_BINARY_RESPONSE_SUBDOC_PATH_ENOENT, "");
+    }
+
+    // After deleting everything the dictionary should be empty.
+    validate_object("dict", "{}");
+
+    return TEST_PASS;
+}
