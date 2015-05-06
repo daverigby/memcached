@@ -4275,7 +4275,9 @@ struct testcase testcases[] = {
     TESTCASE_PLAIN_AND_SSL("subdoc_dict_add_deep", test_subdoc_dict_add_deep),
     TESTCASE_PLAIN_AND_SSL("subdoc_dict_upsert_simple_raw", test_subdoc_dict_upsert_simple_raw),
     TESTCASE_PLAIN_AND_SSL("subdoc_dict_upsert_simple_compressed", test_subdoc_dict_upsert_simple_compressed),
-    TESTCASE_PLAIN_AND_SSL("subdoc_delete_simple", test_subdoc_delete_simple),
+    TESTCASE_PLAIN_AND_SSL("subdoc_delete_simple_raw", test_subdoc_delete_simple_raw),
+    TESTCASE_PLAIN_AND_SSL("subdoc_delete_simple_compressed", test_subdoc_delete_simple_compressed),
+    TESTCASE_PLAIN_AND_SSL("subdoc_delete_array", test_subdoc_delete_array),
     TESTCASE_PLAIN(NULL, NULL)
 };
 
