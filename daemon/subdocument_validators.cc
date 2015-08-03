@@ -115,3 +115,84 @@ int subdoc_counter_validator(void* packet) {
     return subdoc_validator<PROTOCOL_BINARY_CMD_SUBDOC_COUNTER>(packet);
 }
 
+// Multi-path commands are a bit special - don't use the subdoc_validator<>
+// for them.
+int subdoc_multi_lookup_validator(void* packet)
+{
+    auto req = static_cast<protocol_binary_request_subdocument_multi_lookup*>(packet);
+
+    // 1. Check simple static values.
+
+    // Must have at least one lookup spec; with at least a 1B path.
+    const size_t minimum_body_len =
+                    sizeof(protocol_binary_subdoc_multi_lookup_spec) + 1;
+
+    if ((req->header.request.magic != PROTOCOL_BINARY_REQ) ||
+        (req->header.request.keylen == 0) ||
+        (req->header.request.extlen != 0) ||
+        (req->header.request.bodylen < minimum_body_len) ||
+        (req->header.request.datatype != PROTOCOL_BINARY_RAW_BYTES)) {
+        return -1;
+    }
+
+    // 2. Check that the lookup operation specs are valid.
+    const char* const body_ptr = reinterpret_cast<const char*>(packet) +
+                                 sizeof(req->header);
+    const size_t keylen = ntohs(req->header.request.keylen);
+    const size_t bodylen = ntohl(req->header.request.bodylen);
+    size_t body_validated = keylen;
+    unsigned int path_index;
+    for (path_index = 0;
+         (path_index < PROTOCOL_BINARY_SUBDOC_MULTI_MAX_PATHS) &&
+         (body_validated < bodylen);
+         path_index++) {
+        auto* spec = reinterpret_cast<const protocol_binary_subdoc_multi_lookup_spec*>
+            (body_ptr + body_validated);
+
+        const uint16_t pathlen = htons(spec->pathlen);
+
+        // 2a. Check generic parameters.
+        if (((spec->opcode != PROTOCOL_BINARY_CMD_SUBDOC_GET) &&
+             (spec->opcode != PROTOCOL_BINARY_CMD_SUBDOC_EXISTS)) ||
+            (pathlen == 0) ||
+            (pathlen > SUBDOC_PATH_MAX_LENGTH)) {
+            return -1;
+        }
+
+        // 2b. Check per-command parameters.
+        switch (static_cast<protocol_binary_command>(spec->opcode))
+        {
+        case PROTOCOL_BINARY_CMD_SUBDOC_GET:
+            {
+                cmd_traits<Cmd2Type<PROTOCOL_BINARY_CMD_SUBDOC_GET> > traits;
+                if ((spec->flags & ~traits.valid_flags) != 0) {
+                    return -1;
+                }
+                break;
+            }
+        case PROTOCOL_BINARY_CMD_SUBDOC_EXISTS:
+            {
+                cmd_traits<Cmd2Type<PROTOCOL_BINARY_CMD_SUBDOC_EXISTS> > traits;
+                if ((spec->flags & ~traits.valid_flags) != 0) {
+                    return -1;
+                }
+                break;
+            }
+        default:
+            return -1;
+        }
+
+        size_t spec_len = sizeof(*spec) + pathlen;
+        body_validated += spec_len;
+    }
+
+    // Only valid if we didn't exceed the number of paths and the validated
+    // length is exactly the same as the specified length.
+    if ((path_index > 0) &&
+        (path_index <= PROTOCOL_BINARY_SUBDOC_MULTI_MAX_PATHS) &&
+        (body_validated == bodylen)) {
+        return 0;
+    }
+
+    return -1;
+}
