@@ -32,6 +32,65 @@
  * Subdocument executors
  *****************************************************************************/
 
+
+static Subdoc::Command mcbp2subjson_cmd(protocol_binary_command cmd) {
+    switch (cmd) {
+    case PROTOCOL_BINARY_CMD_SUBDOC_GET:
+        return Subdoc::Command::GET;
+    case PROTOCOL_BINARY_CMD_SUBDOC_EXISTS:
+        return Subdoc::Command::EXISTS;
+    case PROTOCOL_BINARY_CMD_SUBDOC_DICT_ADD:
+        return Subdoc::Command::DICT_ADD;
+    case PROTOCOL_BINARY_CMD_SUBDOC_DICT_UPSERT:
+        return Subdoc::Command::DICT_UPSERT;
+    case PROTOCOL_BINARY_CMD_SUBDOC_DELETE:
+        return Subdoc::Command::REMOVE;
+    case PROTOCOL_BINARY_CMD_SUBDOC_REPLACE:
+        return Subdoc::Command::REPLACE;
+    case PROTOCOL_BINARY_CMD_SUBDOC_ARRAY_PUSH_LAST:
+        return Subdoc::Command::ARRAY_PREPEND;
+    case PROTOCOL_BINARY_CMD_SUBDOC_ARRAY_PUSH_FIRST:
+        return Subdoc::Command::ARRAY_APPEND;
+    case PROTOCOL_BINARY_CMD_SUBDOC_ARRAY_INSERT:
+        return Subdoc::Command::ARRAY_INSERT;
+    case PROTOCOL_BINARY_CMD_SUBDOC_ARRAY_ADD_UNIQUE:
+        return Subdoc::Command::ARRAY_ADD_UNIQUE;
+    case PROTOCOL_BINARY_CMD_SUBDOC_COUNTER:
+        return Subdoc::Command::COUNTER;
+    default:
+        return Subdoc::Command::INVALID;
+    }
+};
+
+static bool request_has_value(protocol_binary_command cmd) {
+    switch (cmd) {
+    case PROTOCOL_BINARY_CMD_SUBDOC_GET:
+        return cmd_traits<Cmd2Type<PROTOCOL_BINARY_CMD_SUBDOC_GET>>::request_has_value;
+    case PROTOCOL_BINARY_CMD_SUBDOC_EXISTS:
+        return cmd_traits<Cmd2Type<PROTOCOL_BINARY_CMD_SUBDOC_EXISTS>>::request_has_value;
+    case PROTOCOL_BINARY_CMD_SUBDOC_DICT_ADD:
+        return cmd_traits<Cmd2Type<PROTOCOL_BINARY_CMD_SUBDOC_DICT_ADD>>::request_has_value;
+    case PROTOCOL_BINARY_CMD_SUBDOC_DICT_UPSERT:
+        return cmd_traits<Cmd2Type<PROTOCOL_BINARY_CMD_SUBDOC_DICT_UPSERT>>::request_has_value;
+    case PROTOCOL_BINARY_CMD_SUBDOC_DELETE:
+        return cmd_traits<Cmd2Type<PROTOCOL_BINARY_CMD_SUBDOC_DELETE>>::request_has_value;
+    case PROTOCOL_BINARY_CMD_SUBDOC_REPLACE:
+        return cmd_traits<Cmd2Type<PROTOCOL_BINARY_CMD_SUBDOC_REPLACE>>::request_has_value;
+    case PROTOCOL_BINARY_CMD_SUBDOC_ARRAY_PUSH_LAST:
+        return cmd_traits<Cmd2Type<PROTOCOL_BINARY_CMD_SUBDOC_ARRAY_PUSH_LAST>>::request_has_value;
+    case PROTOCOL_BINARY_CMD_SUBDOC_ARRAY_PUSH_FIRST:
+        return cmd_traits<Cmd2Type<PROTOCOL_BINARY_CMD_SUBDOC_ARRAY_PUSH_FIRST>>::request_has_value;
+    case PROTOCOL_BINARY_CMD_SUBDOC_ARRAY_INSERT:
+        return cmd_traits<Cmd2Type<PROTOCOL_BINARY_CMD_SUBDOC_ARRAY_INSERT>>::request_has_value;
+    case PROTOCOL_BINARY_CMD_SUBDOC_ARRAY_ADD_UNIQUE:
+        return cmd_traits<Cmd2Type<PROTOCOL_BINARY_CMD_SUBDOC_ARRAY_ADD_UNIQUE>>::request_has_value;
+    case PROTOCOL_BINARY_CMD_SUBDOC_COUNTER:
+        return cmd_traits<Cmd2Type<PROTOCOL_BINARY_CMD_SUBDOC_COUNTER>>::request_has_value;
+    default:
+        return false;
+    }
+}
+
 /*
  * Declarations
  */
@@ -42,6 +101,13 @@ template<protocol_binary_command CMD>
 static bool subdoc_operate(Connection * c, const char* path, size_t pathlen,
                            const char* value, size_t vallen,
                            protocol_binary_subdoc_flag flags, uint64_t in_cas);
+// Specialization of subdoc_operate for MULTI_LOOKUP
+template<>
+bool subdoc_operate<PROTOCOL_BINARY_CMD_SUBDOC_MULTI_LOOKUP>
+        (Connection * c, const char* path, size_t pathlen,
+         const char* value, size_t vallen,
+         protocol_binary_subdoc_flag flags, uint64_t in_cas);
+
 template<protocol_binary_command CMD>
 static ENGINE_ERROR_CODE subdoc_update(Connection * c, ENGINE_ERROR_CODE ret,
                                        const char* key, size_t keylen,
@@ -83,19 +149,15 @@ static void subdoc_print_command(Connection* c, protocol_binary_command cmd,
  * Definitions
  */
 
-/* Main template function which handles execution of all sub-document
+/* Template function which handles execution of single-path sub-document
  * commands: fetches, operates on, updates and finally responds to the client.
- *
- * Invoked via extern "C" trampoline functions (see later) which populate the
- * subdocument elements of executors[].
  *
  * @param CMD sub-document command the function is templated on.
  * @param c connection object.
  * @param packet request packet.
  */
 template<protocol_binary_command CMD>
-static void subdoc_executor(Connection *c, const void *packet) {
-
+static void subdoc_single_path_executor(Connection *c, const void *packet) {
     // 0. Parse the request and log it if debug enabled.
     const protocol_binary_request_subdocument *req =
             reinterpret_cast<const protocol_binary_request_subdocument*>(packet);
@@ -125,6 +187,12 @@ static void subdoc_executor(Connection *c, const void *packet) {
     // c->aiostat.
     ENGINE_ERROR_CODE ret = c->getAiostat();
     c->setAiostat(ENGINE_SUCCESS);
+
+    // If we don't already have a command context (this is our first time at
+    // subdoc club), allocate one.
+    if (c->getCommandContext() == nullptr) {
+        c->setCommandContext(new SubdocCmdContext(c));
+    }
 
     // If client didn't specify a CAS, we still use CAS internally to check
     // that we are updating the same version of the document as was fetched.
@@ -203,6 +271,153 @@ static void subdoc_executor(Connection *c, const void *packet) {
     write_bin_packet(c, engine_error_2_protocol_error(ENGINE_TMPFAIL));
 }
 
+/* Template function which handles execution of multi-path sub-document
+ * commands: MULTI_LOOKUP and MULTI_MUTATION.
+ *
+ * @param CMD sub-document command the function is templated on.
+ * @param c connection object.
+ * @param packet request packet.
+ */
+template<protocol_binary_command CMD>
+static void subdoc_multi_path_executor(Connection *c, const void *packet) {
+
+    // 0. Parse the request and log it if debug enabled.
+    const auto* req =
+            reinterpret_cast<const protocol_binary_request_subdocument_multi_lookup*>(packet);
+    const protocol_binary_request_header* header = &req->message.header;
+
+    const uint8_t extlen = header->request.extlen;
+    const uint16_t keylen = ntohs(header->request.keylen);
+    const uint32_t bodylen = ntohl(header->request.bodylen);
+    const uint16_t vbucket = ntohs(header->request.vbucket);
+    const uint64_t cas = ntohll(header->request.cas);
+
+    const char* key = (char*)packet + sizeof(*header) + extlen;
+
+    const char* value = key + keylen;
+    const uint32_t vallen = bodylen - keylen - extlen;
+
+    if (settings.verbose > 1) {
+        subdoc_print_command(c, CMD, key, keylen, "<multi>", strlen("<multi>"),
+                             value, vallen);
+    }
+
+    // We potentially need to make multiple attempts at this as the engine may
+    // return EWOULDBLOCK if not initially resident, hence initialise ret to
+    // c->aiostat.
+    ENGINE_ERROR_CODE ret = c->getAiostat();
+    c->setAiostat(ENGINE_SUCCESS);
+
+    // If we don't already have a command context (this is our first time at
+    // subdoc club), allocate one.
+    if (c->getCommandContext() == nullptr) {
+        c->setCommandContext(new SubdocMultiCmdContext(c));
+    }
+
+    // If client didn't specify a CAS, we still use CAS internally to check
+    // that we are updating the same version of the document as was fetched.
+    // However in this case we auto-retry in the event of a concurrent update
+    // by some other client.
+    const bool auto_retry = (cas == 0);
+
+    // We specify a finite number of times to retry; to prevent the (extremely
+    // unlikely) event that we are fighting with another client for the
+    // correct CAS value for an abitrary amount of time (and to defend against
+    // possible bugs in our code ;)
+    const int MAXIMUM_ATTEMPTS = 100;
+
+    int attempts = 0;
+    do {
+        attempts++;
+
+        // 1. Attempt to fetch from the engine the document to operate on. Only
+        // continue if it returned true, otherwise return from this function
+        // (which may result in it being called again later in the EWOULDBLOCK
+        // case).
+        if (!subdoc_fetch(c, ret, key, keylen, vbucket)) {
+            return;
+        }
+        fprintf(stderr, "%s - fetch completed\n", __PRETTY_FUNCTION__);
+
+        // 2. Perform the operation(s) specified by CMD. Again, return if it fails.
+        // TODO: clean up the unused args. */
+        if (!subdoc_operate<CMD>(c, /*path*/NULL, /*pathlen*/0, value, vallen,
+                                 protocol_binary_subdoc_flag(0), cas)) {
+            return;
+        }
+        fprintf(stderr, "%s - operate completed\n", __PRETTY_FUNCTION__);
+
+        // 3. Update the document in the engine (mutations only).
+        ret = subdoc_update<CMD>(c, ret, key, keylen, vbucket);
+        if (ret == ENGINE_KEY_EEXISTS) {
+            if (auto_retry) {
+                // Retry the operation. Reset the command context and related
+                // state, so start from the beginning again.
+                ret = ENGINE_SUCCESS;
+                if (c->item != nullptr) {
+                    auto handle = reinterpret_cast<ENGINE_HANDLE*>(c->getBucketEngine());
+                    c->getBucketEngine()->release(handle, c, c->item);
+                    c->item = nullptr;
+                }
+
+                c->resetCommandContext();
+                continue;
+            } else {
+                // No auto-retry - return status back to client and return.
+                write_bin_packet(c, engine_error_2_protocol_error(ret));
+                return;
+            }
+        } else if (ret != ENGINE_SUCCESS) {
+            return;
+        }
+
+        // Update stats. Treat all mutations as 'cmd_set', all accesses as 'cmd_get'
+        if (cmd_traits<Cmd2Type<CMD>>::is_mutator) {
+            SLAB_INCR(c, cmd_set, key, keylen);
+        } else {
+            STATS_HIT(c, get, key, nkey);
+        }
+        update_topkeys(key, keylen, c);
+
+        // 4. Form a response and send it back to the client.
+        subdoc_response<CMD>(c);
+        return;
+    } while (auto_retry && attempts < MAXIMUM_ATTEMPTS);
+
+    // Hit maximum attempts - this theoretically could happen but shouldn't
+    // in reality.
+    settings.extensions.logger->log
+        (EXTENSION_LOG_WARNING, c,
+         "%u: Subdoc: Hit maximum number of auto-retry attempts (%d) when "
+         "attempting to perform op %s for client %s - returning TMPFAIL",
+         c->getId(), MAXIMUM_ATTEMPTS, memcached_opcode_2_text(CMD),
+         c->getPeername().c_str());
+    write_bin_packet(c, engine_error_2_protocol_error(ENGINE_TMPFAIL));
+}
+
+/* Template function which handles execution of all sub-document
+ * commands: fetches, operates on, updates and finally responds to the client.
+ *
+ * Invoked via extern "C" trampoline functions (see later) which populate the
+ * subdocument elements of executors[].
+ *
+ * Actual execution splits into single-path and multi-path commands.
+ *
+ * @param CMD sub-document command the function is templated on.
+ * @param c connection object.
+ * @param packet request packet.
+ */
+template<protocol_binary_command CMD>
+static void subdoc_executor(Connection *c, const void *packet) {
+
+    switch (cmd_traits<Cmd2Type<CMD>>::path) {
+    case SubdocPath::SINGLE:
+        return subdoc_single_path_executor<CMD>(c, packet);
+    case SubdocPath::MULTI:
+        return subdoc_multi_path_executor<CMD>(c, packet);
+    }
+}
+
 /* Gets a flat, uncompressed JSON document ready for performing a subjson
  * operation on it.
  * Returns true if a buffer could be prepared, updating {buf} with the address
@@ -211,7 +426,7 @@ static void subdoc_executor(Connection *c, const void *packet) {
  */
 static protocol_binary_response_status
 get_document_for_searching(Connection * c, const item* item,
-                           sized_buffer& document, uint64_t in_cas,
+                           const_sized_buffer& document, uint64_t in_cas,
                            uint64_t& cas) {
 
     item_info_holder info;
@@ -345,11 +560,8 @@ static bool subdoc_fetch(Connection * c, ENGINE_ERROR_CODE ret, const char* key,
         switch (ret) {
         case ENGINE_SUCCESS:
             // We have the item; assign to c->item (so we'll start from step 2
-            // next time) and create the subdoc_cmd_context for the other
-            // information we need to record.
+            // next time).
             c->item = initial_item;
-            cb_assert(c->getCommandContext() == nullptr);
-            c->setCommandContext(new SubdocCmdContext(c));
             break;
 
         case ENGINE_EWOULDBLOCK:
@@ -384,7 +596,7 @@ static bool subdoc_operate(Connection * c, const char* path, size_t pathlen,
         // Retrieve the item_info the engine, and if necessary
         // uncompress it so subjson can parse it.
         uint64_t doc_cas;
-        sized_buffer doc;
+        const_sized_buffer doc;
         protocol_binary_response_status status =
             get_document_for_searching(c, c->item, doc, in_cas, doc_cas);
 
@@ -467,6 +679,143 @@ static bool subdoc_operate(Connection * c, const char* path, size_t pathlen,
             write_bin_packet(c, PROTOCOL_BINARY_RESPONSE_EINTERNAL);
             return false;
         }
+    }
+
+    return true;
+}
+
+
+static protocol_binary_response_status
+subdoc_operate_single(Connection* c, const const_sized_buffer& in_doc,
+                      uint64_t in_cas,
+                      SubdocMultiCmdContext::OperationSpec& spec) {
+
+    // Prepare the specified sub-document command.
+    Subdoc::Operation* op = c->getThread()->subdoc_op;
+    op->clear();
+    Subdoc::Command opcode = mcbp2subjson_cmd(spec.cmd);
+    if ((spec.flags & SUBDOC_FLAG_MKDIR_P) == SUBDOC_FLAG_MKDIR_P) {
+        opcode = Subdoc::Command(opcode | Subdoc::Command::FLAG_MKDIR_P);
+    }
+    op->set_result_buf(&spec.result);
+    op->set_code(opcode);
+    op->set_doc(in_doc.buf, in_doc.len);
+    if (request_has_value(spec.cmd)) {
+        op->set_value(spec.value.buf, spec.value.len);
+    }
+
+    // ... and execute it.
+    Subdoc::Error subdoc_res = op->op_exec(spec.path.buf, spec.path.len);
+
+    switch (subdoc_res) {
+    case Subdoc::Error::SUCCESS:
+        return PROTOCOL_BINARY_RESPONSE_SUCCESS;
+
+    case Subdoc::Error::PATH_ENOENT:
+        return PROTOCOL_BINARY_RESPONSE_SUBDOC_PATH_ENOENT;
+
+    case Subdoc::Error::PATH_MISMATCH:
+        return PROTOCOL_BINARY_RESPONSE_SUBDOC_PATH_MISMATCH;
+
+    case Subdoc::Error::DOC_ETOODEEP:
+        return PROTOCOL_BINARY_RESPONSE_SUBDOC_DOC_E2DEEP;
+
+    case Subdoc::Error::PATH_EINVAL:
+        return PROTOCOL_BINARY_RESPONSE_SUBDOC_PATH_EINVAL;
+
+    case Subdoc::Error::DOC_EEXISTS:
+        return PROTOCOL_BINARY_RESPONSE_SUBDOC_PATH_EEXISTS;
+
+    case Subdoc::Error::PATH_E2BIG:
+        return PROTOCOL_BINARY_RESPONSE_SUBDOC_PATH_E2BIG;
+
+    case Subdoc::Error::NUM_E2BIG:
+        return PROTOCOL_BINARY_RESPONSE_SUBDOC_NUM_ERANGE;
+
+    case Subdoc::Error::DELTA_E2BIG:
+        return PROTOCOL_BINARY_RESPONSE_SUBDOC_DELTA_ERANGE;
+
+    case Subdoc::Error::VALUE_CANTINSERT:
+        return PROTOCOL_BINARY_RESPONSE_SUBDOC_VALUE_CANTINSERT;
+
+    case Subdoc::Error::VALUE_ETOODEEP:
+        return PROTOCOL_BINARY_RESPONSE_SUBDOC_VALUE_ETOODEEP;
+
+    default:
+        // TODO: handle remaining errors.
+        settings.extensions.logger->log(EXTENSION_LOG_DEBUG, c,
+                                        "Unexpected response from subdoc: %d (0x%x)",
+                                        subdoc_res, subdoc_res);
+        return PROTOCOL_BINARY_RESPONSE_EINTERNAL;
+    }
+}
+
+
+/* Specialization for multi-lookup commands. For multi-path commands we need
+ * to make a number of subjson calls; one per lookup spec.
+ */
+template<>
+bool subdoc_operate<PROTOCOL_BINARY_CMD_SUBDOC_MULTI_LOOKUP>
+        (Connection * c, const char* path, size_t pathlen,
+         const char* value, size_t vallen,
+         protocol_binary_subdoc_flag flags, uint64_t in_cas) {
+
+    auto* context = dynamic_cast<SubdocMultiCmdContext*>(c->getCommandContext());
+
+    // We use the presence (or absence) of the in_doc to determine if we have
+    // already performed the operations on this document (EWOULDBLOCK handling).
+    if (context->in_doc.buf == NULL) {
+        // Retrieve the item_info the engine, and if necessary
+        // uncompress it so subjson can parse it.
+        uint64_t doc_cas;
+        const_sized_buffer doc;
+        protocol_binary_response_status status =
+            get_document_for_searching(c, c->item, doc, in_cas, doc_cas);
+
+        if (status != PROTOCOL_BINARY_RESPONSE_SUCCESS) {
+            // Failed. Note c->item and c->commandContext will both be freed for
+            // us as part of preparing for the next command.
+            fprintf(stderr, "%s - status:0x%x\n", __PRETTY_FUNCTION__, status);
+            write_bin_packet(c, status);
+            return false;
+        }
+
+        // 1. Decode each of lookup specs from the value into our command context.
+        size_t offset = 0;
+        while (offset < vallen) {
+            auto* spec = reinterpret_cast<const protocol_binary_subdoc_multi_lookup_spec*>
+                (value + offset);
+
+            const protocol_binary_command opcode =
+                    protocol_binary_command(spec->opcode);
+            const protocol_binary_subdoc_flag flags =
+                    protocol_binary_subdoc_flag(spec->flags);
+            const uint16_t pathlen = htons(spec->pathlen);
+            const char* path = value + offset + sizeof(*spec);
+
+            context->ops.emplace_back
+                (SubdocMultiCmdContext::OperationSpec{opcode, flags, {path, pathlen}});
+
+            offset += sizeof(*spec) + pathlen;
+        }
+
+        context->overall_status = PROTOCOL_BINARY_RESPONSE_SUCCESS;
+
+        // 2. Perform each of the operations on document.
+        for (auto& op : context->ops) {
+            // For lookup; an operation failing doesn't stop us continuing
+            // with the rest of the operations, but does need to be reflected in
+            // overall status.
+            op.status = subdoc_operate_single(c, doc, doc_cas,
+                                              op);
+            if (op.status != PROTOCOL_BINARY_RESPONSE_SUCCESS) {
+                context->overall_status = PROTOCOL_BINARY_RESPONSE_SUBDOC_PARTIAL_FAILURE;
+            }
+        }
+
+        // Completed multi-operaton; record in_doc to denote this fact.
+        context->in_doc = doc;
+        context->in_cas = doc_cas;
     }
 
     return true;
@@ -579,6 +928,21 @@ ENGINE_ERROR_CODE subdoc_update(Connection * c, ENGINE_ERROR_CODE ret, const cha
     return ret;
 }
 
+// Specialization of subdoc_update for multipath lookup commands.
+template<>
+ENGINE_ERROR_CODE subdoc_update<PROTOCOL_BINARY_CMD_SUBDOC_MULTI_LOOKUP>
+        (Connection * c, ENGINE_ERROR_CODE ret, const char* key,
+         size_t keylen, uint16_t vbucket) {
+
+    auto* context = dynamic_cast<SubdocMultiCmdContext*>(c->getCommandContext());
+    cb_assert(context != NULL);
+
+    // MULTI_LOOKUP - No update required - just make sure we have the correct
+    // cas to use for response.
+    c->setCAS(context->in_cas);
+    return ENGINE_SUCCESS;
+};
+
 // Respond back to the user as appropriate to the specific command.
 template<protocol_binary_command CMD>
 void subdoc_response(Connection * c) {
@@ -605,6 +969,47 @@ void subdoc_response(Connection * c) {
 
     if (cmd_traits<Cmd2Type<CMD>>::response_has_value) {
         add_iov(c, value, vallen);
+    }
+    c->setState(conn_mwrite);
+}
+
+// Specialization of subdoc_response for multipath lookup commands.
+template<>
+void subdoc_response<PROTOCOL_BINARY_CMD_SUBDOC_MULTI_LOOKUP>(Connection * c) {
+    auto* context = dynamic_cast<SubdocMultiCmdContext*>(c->getCommandContext());
+    cb_assert(context != NULL);
+
+    protocol_binary_response_subdocument* rsp =
+            reinterpret_cast<protocol_binary_response_subdocument*>(c->write.buf);
+
+    const char* value = NULL;
+    // multi always has a response.
+
+    // Calculate the value length - sum of all the operation results.
+    size_t vallen = 0;
+    for (auto& op : context->ops) {
+        vallen += op.result.matchloc().length;
+    }
+
+    // Build the header.
+    if (add_bin_header(c, 0, /*extlen*/0, /*keylen*/0, vallen,
+                       PROTOCOL_BINARY_RAW_BYTES) == -1) {
+        c->setState(conn_closing);
+        return;
+    }
+    rsp->message.header.response.cas = htonll(c->getCAS());
+
+    // Need three iovecs per operation:
+    // 1. status (uin16_t)
+    // 2. vallen (uint32_t)
+    // 3. actual value.
+    // PERF: Could combine (1) and (2) if we combined them into a packed struct
+    //       in CmdContext.
+    for (auto& op : context->ops) {
+        add_iov(c, reinterpret_cast<void*>(&op.status), sizeof(op.status));
+        auto mloc = op.result.matchloc();
+        add_iov(c, reinterpret_cast<void*>(&mloc.length), sizeof(uint32_t));
+        add_iov(c, mloc.at, mloc.length);
     }
     c->setState(conn_mwrite);
 }
@@ -651,4 +1056,8 @@ void subdoc_array_add_unique_executor(Connection *c, void *packet) {
 
 void subdoc_counter_executor(Connection *c, void *packet) {
     return subdoc_executor<PROTOCOL_BINARY_CMD_SUBDOC_COUNTER>(c, packet);
+}
+
+void subdoc_multi_lookup_executor(Connection *c, void *packet) {
+    return subdoc_executor<PROTOCOL_BINARY_CMD_SUBDOC_MULTI_LOOKUP>(c, packet);
 }

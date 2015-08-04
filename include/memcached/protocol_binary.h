@@ -181,7 +181,15 @@ extern "C"
 
         /** [For mutations only] Inserting the value would cause the document
          * to be too deep. */
-        PROTOCOL_BINARY_RESPONSE_SUBDOC_VALUE_ETOODEEP = 0xca
+        PROTOCOL_BINARY_RESPONSE_SUBDOC_VALUE_ETOODEEP = 0xca,
+
+        /** [For multi-path commands only] An invalid combination of commands
+         * was specified. */
+        PROTOCOL_BINARY_RESPONSE_SUBDOC_INVALID_COMBO = 0xcb,
+
+        /** [For multi-lookup only] One or more lookups failed. Examine the
+         * individual lookup_result structures for details. */
+        PROTOCOL_BINARY_RESPONSE_SUBDOC_PARTIAL_FAILURE = 0xcc
 
     } protocol_binary_response_status;
 
@@ -869,11 +877,7 @@ extern "C"
      /* uint8_t path[pathlen] */
     } protocol_binary_subdoc_multi_lookup_spec;
 
-    typedef struct {
-        protocol_binary_request_header header;
-        /* Variable-length 1..PROTOCOL_BINARY_SUBDOC_MULTI_MAX_PATHS */
-        protocol_binary_subdoc_multi_lookup_spec body[1];
-    } protocol_binary_request_subdocument_multi_lookup;
+    typedef protocol_binary_request_no_extras protocol_binary_request_subdocument_multi_lookup;
 
     /*
      *
@@ -901,11 +905,7 @@ extern "C"
      /* uint8_t value[valuelen]  */
     } protocol_binary_subdoc_multi_mutation_spec;
 
-    typedef struct {
-        protocol_binary_request_header header;
-        /* Variable-length 1..PROTOCOL_BINARY_SUBDOC_MULTI_MAX_PATHS */
-        protocol_binary_subdoc_multi_mutation_spec body[1];
-    } protocol_binary_request_subdocument_multi_mutation;
+    typedef protocol_binary_request_no_extras protocol_binary_request_subdocument_multi_mutation;
 
     /**
      * Definition of the response packets used by SUBDOCUMENT multi-path
@@ -913,12 +913,12 @@ extern "C"
      *
      * SUBDOC_MULTI_LOOKUP - Body consists of a series of lookup_result structs,
      *                       one per lookup_spec in the request.
+     *
+     * Lookup Result:
+     *                            2 @0 : status
+     *                            4 @2 : valuelen
+     *                     valuelen @6 : value
      */
-    typedef struct {
-        uint16_t status;
-        uint32_t valuelen;
-    } protocol_binary_subdoc_multi_lookup_result;
-
     typedef struct {
         protocol_binary_request_header header;
         /* Variable-length 1..PROTOCOL_BINARY_SUBDOC_MULTI_MAX_PATHS */
@@ -929,6 +929,8 @@ extern "C"
      * SUBDOC_MULTI_MUTATION - Body is either empty (if all mutations
      *                         successful), or contains the index of the first
      *                         failed command.
+     * Mutation Result (success):
+     *                            1 @0 : 0-based index of the first command which failed
      */
     typedef union {
         struct {

@@ -4979,6 +4979,7 @@ static void setup_bin_packet_handlers(void) {
     executors[PROTOCOL_BINARY_CMD_SUBDOC_ARRAY_INSERT] = subdoc_array_insert_executor;
     executors[PROTOCOL_BINARY_CMD_SUBDOC_ARRAY_ADD_UNIQUE] = subdoc_array_add_unique_executor;
     executors[PROTOCOL_BINARY_CMD_SUBDOC_COUNTER] = subdoc_counter_executor;
+    executors[PROTOCOL_BINARY_CMD_SUBDOC_MULTI_LOOKUP] = subdoc_multi_lookup_executor;
 
     executors[PROTOCOL_BINARY_CMD_CREATE_BUCKET] = create_bucket_executor;
     executors[PROTOCOL_BINARY_CMD_LIST_BUCKETS] = list_bucket_executor;
@@ -5025,13 +5026,26 @@ static void process_bin_packet(Connection *c) {
         write_bin_packet(c, PROTOCOL_BINARY_RESPONSE_EACCESS);
         break;
     case AuthResult::OK:
-        if (validator != NULL && validator(packet) != 0) {
-            settings.extensions.logger->log(EXTENSION_LOG_WARNING, c,
-                                            "%u: Invalid format for specified for %s",
-                                            c->getId(),
-                                            memcached_opcode_2_text(opcode));
-            write_bin_packet(c, PROTOCOL_BINARY_RESPONSE_EINVAL);
-        } else if (executor != NULL) {
+        if (validator != NULL) {
+            int result = validator(packet);
+            if (result != 0) {
+                settings.extensions.logger->log
+                    (EXTENSION_LOG_WARNING, c,
+                     "%u: Invalid format for specified for %s - %d",
+                     c->getId(), memcached_opcode_2_text(opcode), result);
+
+                // '-1' is the generic 'invalid request'; any other
+                // non-zero result is a more specific error code.
+                if (result == -1) {
+                    write_bin_packet(c, PROTOCOL_BINARY_RESPONSE_EINVAL);
+                } else {
+                    write_bin_packet(c, protocol_binary_response_status(result));
+                }
+                break;
+            }
+        }
+
+        if (executor != NULL) {
             executor(c, packet);
         } else {
             process_bin_unknown_packet(c);

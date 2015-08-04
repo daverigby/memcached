@@ -17,7 +17,7 @@
 
 #pragma once
 
-#include "connection.h"
+#include "memcached.h"
 
 #include <cstddef>
 
@@ -27,6 +27,12 @@
  */
 struct sized_buffer {
     char* buf;
+    size_t len;
+};
+
+/* Const variant of sized_buffer. */
+struct const_sized_buffer {
+    const char* buf;
     size_t len;
 };
 
@@ -61,7 +67,7 @@ struct SubdocCmdContext : public CommandContext {
     // The expanded input JSON document. This may either refer to the raw engine
     // item iovec; or to the connections' DynamicBuffer if the JSON document
     // had to be decompressed. Either way, it should /not/ be free()d.
-    sized_buffer in_doc;
+    const_sized_buffer in_doc;
 
     // CAS value of the input document. Required to ensure we only store a
     // new document which was derived from the same original input document.
@@ -73,4 +79,88 @@ struct SubdocCmdContext : public CommandContext {
     // [Mutations only] New item to store into engine. _Must_ be released
     // back to the engine using ENGINE_HANDLE_V1::release()
     item* out_doc;
+};
+
+
+/** Subdoc multi-path command context.
+ *
+ * TODO: Perhaps unify this with the existing SubdocCmdContext (single)?
+ */
+class SubdocMultiCmdContext : public CommandContext {
+public:
+    class OperationSpec;
+    typedef std::vector<OperationSpec> Operations;
+
+    SubdocMultiCmdContext(Connection* connection)
+      : in_doc({NULL, 0}),
+        in_cas(0),
+        out_doc(NULL),
+        c(connection) {}
+
+    virtual ~SubdocMultiCmdContext() {
+        if (out_doc != NULL) {
+            auto engine = c->getBucketEngine();
+            engine->release(reinterpret_cast<ENGINE_HANDLE*>(engine), c, out_doc);
+        }
+    }
+
+    /* Specification of a single path operation. Encapsulates both the request
+     * parameters, and (later) the result of the operation.
+     */
+    class OperationSpec {
+    public:
+        // Constructor for lookup operations (no value).
+        OperationSpec(protocol_binary_command cmd_,
+                      protocol_binary_subdoc_flag flags_,
+                      const_sized_buffer path_)
+          : cmd(cmd_),
+            flags(flags_),
+            path(path_) {}
+
+        OperationSpec(OperationSpec&& other)
+          : cmd(other.cmd),
+            flags(other.flags),
+            path(std::move(other.path)) {}
+
+        protocol_binary_command cmd;
+        protocol_binary_subdoc_flag flags;
+
+        // Path to operate on. Owned by the original request packet.
+        const_sized_buffer path;
+
+        // [For mutations only] Value to apply to document. Owned by the
+        // original request packet.
+        const_sized_buffer value;
+
+        // Status code of the operation.
+        protocol_binary_response_status status;
+
+        // Result of this operation, to be returned back to the client (for
+        // operations which return a result).
+        Subdoc::Result result;
+    };
+
+    // Paths to operate on, one per path in the original request.
+    Operations ops;
+
+    // The expanded input JSON document. This may either refer to the raw engine
+    // item iovec; or to the connections' DynamicBuffer if the JSON document
+    // had to be decompressed. Either way, it should /not/ be free()d.
+    const_sized_buffer in_doc;
+
+    // CAS value of the input document. Required to ensure we only store a
+    // new document which was derived from the same original input document.
+    uint64_t in_cas;
+
+    // [Mutations only] New item to store into engine. _Must_ be released
+    // back to the engine using ENGINE_HANDLE_V1::release()
+    item* out_doc;
+
+    // Overall status of the multi-path command.
+    protocol_binary_response_status overall_status;
+
+private:
+    // Connection this command is associated with. Needed by the destructor
+    // to release items.
+    Connection * c;
 };

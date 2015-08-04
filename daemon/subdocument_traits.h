@@ -38,6 +38,11 @@ struct Cmd2Type
   enum { value = C };
 };
 
+enum class SubdocPath {
+    SINGLE,
+    MULTI
+};
+
 /* Traits of each of the sub-document commands. These are used to build up
  * the individual implementations using generic building blocks:
  *
@@ -53,6 +58,7 @@ struct cmd_traits;
 
 template <>
 struct cmd_traits<Cmd2Type<PROTOCOL_BINARY_CMD_SUBDOC_GET> > {
+  static const SubdocPath path = SubdocPath::SINGLE;
   static const Subdoc::Command::Code optype = Subdoc::Command::GET;
   static const bool request_has_value = false;
   static const bool allow_empty_path = false;
@@ -64,6 +70,7 @@ struct cmd_traits<Cmd2Type<PROTOCOL_BINARY_CMD_SUBDOC_GET> > {
 
 template <>
 struct cmd_traits<Cmd2Type<PROTOCOL_BINARY_CMD_SUBDOC_EXISTS> > {
+  static const SubdocPath path = SubdocPath::SINGLE;
   static const Subdoc::Command::Code optype = Subdoc::Command::EXISTS;
   static const bool request_has_value = false;
   static const bool allow_empty_path = false;
@@ -75,6 +82,7 @@ struct cmd_traits<Cmd2Type<PROTOCOL_BINARY_CMD_SUBDOC_EXISTS> > {
 
 template <>
 struct cmd_traits<Cmd2Type<PROTOCOL_BINARY_CMD_SUBDOC_DICT_ADD> > {
+  static const SubdocPath path = SubdocPath::SINGLE;
   static const Subdoc::Command::Code optype = Subdoc::Command::DICT_ADD;
   static const bool request_has_value = true;
   static const bool allow_empty_path = false;
@@ -85,6 +93,7 @@ struct cmd_traits<Cmd2Type<PROTOCOL_BINARY_CMD_SUBDOC_DICT_ADD> > {
 
 template <>
 struct cmd_traits<Cmd2Type<PROTOCOL_BINARY_CMD_SUBDOC_DICT_UPSERT> > {
+  static const SubdocPath path = SubdocPath::SINGLE;
   static const Subdoc::Command::Code optype = Subdoc::Command::DICT_UPSERT;
   static const bool request_has_value = true;
   static const bool allow_empty_path = false;
@@ -95,6 +104,7 @@ struct cmd_traits<Cmd2Type<PROTOCOL_BINARY_CMD_SUBDOC_DICT_UPSERT> > {
 
 template <>
 struct cmd_traits<Cmd2Type<PROTOCOL_BINARY_CMD_SUBDOC_DELETE> > {
+  static const SubdocPath path = SubdocPath::SINGLE;
   static const Subdoc::Command::Code optype = Subdoc::Command::REMOVE;
   static const bool request_has_value = false;
   static const bool allow_empty_path = false;
@@ -106,6 +116,7 @@ struct cmd_traits<Cmd2Type<PROTOCOL_BINARY_CMD_SUBDOC_DELETE> > {
 
 template <>
 struct cmd_traits<Cmd2Type<PROTOCOL_BINARY_CMD_SUBDOC_REPLACE> > {
+  static const SubdocPath path = SubdocPath::SINGLE;
   static const Subdoc::Command::Code optype = Subdoc::Command::REPLACE;
   static const bool request_has_value = true;
   static const bool allow_empty_path = false;
@@ -117,6 +128,7 @@ struct cmd_traits<Cmd2Type<PROTOCOL_BINARY_CMD_SUBDOC_REPLACE> > {
 
 template <>
 struct cmd_traits<Cmd2Type<PROTOCOL_BINARY_CMD_SUBDOC_ARRAY_PUSH_LAST> > {
+  static const SubdocPath path = SubdocPath::SINGLE;
   static const Subdoc::Command::Code optype = Subdoc::Command::ARRAY_APPEND;
   static const bool request_has_value = true;
   static const bool allow_empty_path = true;
@@ -127,6 +139,7 @@ struct cmd_traits<Cmd2Type<PROTOCOL_BINARY_CMD_SUBDOC_ARRAY_PUSH_LAST> > {
 
 template <>
 struct cmd_traits<Cmd2Type<PROTOCOL_BINARY_CMD_SUBDOC_ARRAY_PUSH_FIRST> > {
+  static const SubdocPath path = SubdocPath::SINGLE;
   static const Subdoc::Command::Code optype = Subdoc::Command::ARRAY_PREPEND;
   static const bool request_has_value = true;
   static const bool allow_empty_path = true;
@@ -137,6 +150,7 @@ struct cmd_traits<Cmd2Type<PROTOCOL_BINARY_CMD_SUBDOC_ARRAY_PUSH_FIRST> > {
 
 template <>
 struct cmd_traits<Cmd2Type<PROTOCOL_BINARY_CMD_SUBDOC_ARRAY_INSERT> > {
+  static const SubdocPath path = SubdocPath::SINGLE;
   static const Subdoc::Command::Code optype = Subdoc::Command::ARRAY_INSERT;
   static const bool request_has_value = true;
   static const bool allow_empty_path = false;
@@ -148,6 +162,7 @@ struct cmd_traits<Cmd2Type<PROTOCOL_BINARY_CMD_SUBDOC_ARRAY_INSERT> > {
 
 template <>
 struct cmd_traits<Cmd2Type<PROTOCOL_BINARY_CMD_SUBDOC_ARRAY_ADD_UNIQUE> > {
+  static const SubdocPath path = SubdocPath::SINGLE;
   static const Subdoc::Command::Code optype = Subdoc::Command::ARRAY_ADD_UNIQUE;
   static const bool request_has_value = true;
   static const bool allow_empty_path = true;
@@ -158,10 +173,23 @@ struct cmd_traits<Cmd2Type<PROTOCOL_BINARY_CMD_SUBDOC_ARRAY_ADD_UNIQUE> > {
 
 template <>
 struct cmd_traits<Cmd2Type<PROTOCOL_BINARY_CMD_SUBDOC_COUNTER> > {
+  static const SubdocPath path = SubdocPath::SINGLE;
   static const Subdoc::Command::Code optype = Subdoc::Command::COUNTER;
   static const bool request_has_value = true;
   static const bool allow_empty_path = true;
   static const bool response_has_value = true;
   static const bool is_mutator = true;
   static const protocol_binary_subdoc_flag valid_flags = SUBDOC_FLAG_MKDIR_P;
+};
+
+template <>
+struct cmd_traits<Cmd2Type<PROTOCOL_BINARY_CMD_SUBDOC_MULTI_LOOKUP> > {
+  static const SubdocPath path = SubdocPath::MULTI;
+//  static const Subdoc::Command::Code optype = Subdoc::Command::M;
+  static const bool request_has_value = true;
+  static const bool allow_empty_path = false;
+  static const bool response_has_value = true;
+  static const bool is_mutator = false;
+  static const protocol_binary_subdoc_flag valid_flags =
+          protocol_binary_subdoc_flag(0);
 };

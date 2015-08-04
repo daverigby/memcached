@@ -25,8 +25,8 @@
 #include <cJSON.h>
 #include <memcached/protocol_binary.h>
 #include <memcached/util.h> // for memcached_protocol_errcode_2_text()
-
 #include "../utilities/protocol2text.h"
+#include "../utilities/subdoc_encoder.h"
 
 /*
  * testapp testcases for sub-document API.
@@ -151,6 +151,45 @@ uint64_t expect_subdoc_cmd(const SubdocCmd& cmd,
                            const std::string& expected_value) {
     send_subdoc_cmd(cmd);
     return recv_subdoc_response(cmd.cmd, expected_status, expected_value);
+}
+
+typedef std::pair<protocol_binary_response_status,
+                  std::string> SubdocMultiLookupResult;
+
+// Overload for multi-lookup responses
+uint64_t recv_subdoc_response(protocol_binary_command expected_cmd,
+                              protocol_binary_response_status expected_status,
+                              const std::vector<SubdocMultiLookupResult>& expected_results) {
+    union {
+        protocol_binary_response_subdocument response;
+        char bytes[1024];
+    } receive;
+
+    safe_recv_packet(receive.bytes, sizeof(receive.bytes));
+
+    validate_response_header((protocol_binary_response_no_extras*)&receive.response,
+                             expected_cmd, expected_status);
+
+    // TODO: Check extras for subdoc command and mutation / seqno (if enabled).
+
+    // Decode body and check against expected_results
+
+    // TODO
+
+
+    const auto& header = receive.response.message.header;
+    return header.response.cas;
+}
+
+// Overload for multi-lookup commands.
+uint64_t expect_subdoc_cmd(const SubdocMultiLookupCmd& cmd,
+                           protocol_binary_response_status expected_status,
+                           const std::vector<SubdocMultiLookupResult>& expected_results) {
+    std::vector<char> payload = cmd.encode();
+    safe_send(payload.data(), payload.size(), false);
+
+    return recv_subdoc_response(PROTOCOL_BINARY_CMD_SUBDOC_MULTI_LOOKUP,
+                                expected_status, expected_results);
 }
 
 void store_object(const std::string& key,
@@ -1549,6 +1588,25 @@ TEST_P(McdTestappTest, SubdocCASAutoRetry)
                                 "a", "key3", "3"),
                       PROTOCOL_BINARY_RESPONSE_ETMPFAIL, "");
 }
+
+// Test multi-path lookup command - simple SUBDOC_GET
+TEST_P(McdTestappTest, SubdocMultiLookup_Get)
+{
+    store_object("dict", "{\"key1\":1,\"key2\":\"two\"}");
+
+    SubdocMultiLookupCmd lookup;
+    lookup.key = "dict";
+    lookup.specs.push_back({protocol_binary_command(PROTOCOL_BINARY_CMD_SUBDOC_GET),
+                            protocol_binary_subdoc_flag(0),
+                            "key1"});
+
+    std::vector<SubdocMultiLookupResult> expected{{PROTOCOL_BINARY_RESPONSE_SUCCESS, "1"}};
+
+    expect_subdoc_cmd(lookup, PROTOCOL_BINARY_RESPONSE_SUCCESS, expected);
+
+    delete_object("dict");
+}
+
 
 // Tests how a single worker handles multiple "concurrent" connections
 // performing operations.

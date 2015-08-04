@@ -127,19 +127,19 @@ int subdoc_multi_lookup_validator(void* packet)
     const size_t minimum_body_len =
                     sizeof(protocol_binary_subdoc_multi_lookup_spec) + 1;
 
-    if ((req->header.request.magic != PROTOCOL_BINARY_REQ) ||
-        (req->header.request.keylen == 0) ||
-        (req->header.request.extlen != 0) ||
-        (req->header.request.bodylen < minimum_body_len) ||
-        (req->header.request.datatype != PROTOCOL_BINARY_RAW_BYTES)) {
+    if ((req->message.header.request.magic != PROTOCOL_BINARY_REQ) ||
+        (req->message.header.request.keylen == 0) ||
+        (req->message.header.request.extlen != 0) ||
+        (req->message.header.request.bodylen < minimum_body_len) ||
+        (req->message.header.request.datatype != PROTOCOL_BINARY_RAW_BYTES)) {
         return -1;
     }
 
     // 2. Check that the lookup operation specs are valid.
     const char* const body_ptr = reinterpret_cast<const char*>(packet) +
-                                 sizeof(req->header);
-    const size_t keylen = ntohs(req->header.request.keylen);
-    const size_t bodylen = ntohl(req->header.request.bodylen);
+                                 sizeof(req->message.header);
+    const size_t keylen = ntohs(req->message.header.request.keylen);
+    const size_t bodylen = ntohl(req->message.header.request.bodylen);
     size_t body_validated = keylen;
     unsigned int path_index;
     for (path_index = 0;
@@ -179,7 +179,7 @@ int subdoc_multi_lookup_validator(void* packet)
                 break;
             }
         default:
-            return -1;
+            return PROTOCOL_BINARY_RESPONSE_SUBDOC_INVALID_COMBO;
         }
 
         size_t spec_len = sizeof(*spec) + pathlen;
@@ -188,11 +188,13 @@ int subdoc_multi_lookup_validator(void* packet)
 
     // Only valid if we didn't exceed the number of paths and the validated
     // length is exactly the same as the specified length.
-    if ((path_index > 0) &&
-        (path_index <= PROTOCOL_BINARY_SUBDOC_MULTI_MAX_PATHS) &&
-        (body_validated == bodylen)) {
-        return 0;
+    if ((path_index == 0) ||
+        (path_index > PROTOCOL_BINARY_SUBDOC_MULTI_MAX_PATHS)) {
+        return PROTOCOL_BINARY_RESPONSE_ERANGE;
+    }
+    if (body_validated != bodylen) {
+        return -1;
     }
 
-    return -1;
+    return 0;
 }
