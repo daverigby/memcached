@@ -73,7 +73,7 @@ static enum test_result get_info_features_test(ENGINE_HANDLE *h, ENGINE_HANDLE_V
     const engine_info *info = h1->get_info(h);
     uint32_t nfeats = info->num_features;
     const feature_info *fi = info->features;
-    assert (nfeats > 0);
+    cb_assert (nfeats > 0);
     while (nfeats-- > 0) {
         cb_assert(fi++ != NULL);
     }

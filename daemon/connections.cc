@@ -133,7 +133,15 @@ void run_event_loop(Connection * c) {
         conn_loan_buffers(c);
     }
 
-    c->runStateMachinery();
+    try {
+        c->runStateMachinery();
+    } catch (std::invalid_argument& e) {
+        settings.extensions.logger->log(EXTENSION_LOG_WARNING, c,
+                                        "%d: exception occurred in runloop "
+                                        "- closing connection: %s",
+                                        c->getId(), e.what());
+        c->setState(conn_closing);
+    }
 
     if (!is_listen_thread()) {
         conn_return_buffers(c);

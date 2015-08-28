@@ -291,7 +291,6 @@ void perform_callbacks(ENGINE_EVENT_TYPE type,
                        const void *data,
                        const void *cookie)
 {
-    const Connection * connection = reinterpret_cast<const Connection *>(cookie); /* May not be true, but... */
     struct engine_event_handler *h = NULL;
 
     switch (type) {
@@ -299,13 +298,15 @@ void perform_callbacks(ENGINE_EVENT_TYPE type,
          * The following events operates on a connection which is passed in
          * as the cookie.
          */
-    case ON_DISCONNECT:
+    case ON_DISCONNECT: {
+        const Connection * connection = reinterpret_cast<const Connection *>(cookie);
         cb_assert(connection);
         cb_assert(connection->getBucketIndex() != -1);
         h = all_buckets[connection->getBucketIndex()].engine_event_handlers[type];
         break;
+    }
     case ON_LOG_LEVEL:
-        assert(cookie == NULL);
+        cookie = nullptr; // cookie unused for LOG_LEVEL callbacks.
         h = engine_event_handlers[type];
         break;
     default:

@@ -272,7 +272,9 @@ void RBACManager::dropRole(AuthContext *ctx) {
     }
 
     UserEntryMap::iterator iter = users.find(ctx->getName());
-    assert(iter != users.end());
+    if (iter == users.end()) {
+        throw std::invalid_argument("Unknown role '" + ctx->getName() + "'");
+    }
     applyProfiles(ctx, iter->second.getProfiles());
     ctx->setRole("");
 }
