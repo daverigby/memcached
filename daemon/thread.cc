@@ -112,7 +112,7 @@ static void cq_push(CQ *cq, CQ_ITEM *item) {
  * Returns a fresh connection queue item.
  */
 static CQ_ITEM *cqi_new(void) {
-    return reinterpret_cast<CQ_ITEM*>(malloc(sizeof(CQ_ITEM)));
+    return new CQ_ITEM;
 }
 
 
@@ -120,7 +120,7 @@ static CQ_ITEM *cqi_new(void) {
  * Frees a connection queue item.
  */
 static void cqi_free(CQ_ITEM *item) {
-    free(item);
+    delete item;
 }
 
 
@@ -436,16 +436,26 @@ static int last_thread = -1;
  */
 void dispatch_conn_new(SOCKET sfd, int parent_port,
                        STATE_FUNC init_state) {
-    CQ_ITEM *item = cqi_new();
+    CQ_ITEM *item;
+    try {
+        item = cqi_new();
+
+        item->sfd = sfd;
+        item->parent_port = parent_port;
+        item->init_state = init_state;
+    } catch (std::bad_alloc& e) {
+        settings.extensions.logger->log(EXTENSION_LOG_WARNING, nullptr,
+            "dispatch_conn_new: Failed to dispatch new connection: %s",
+             e.what());
+        close(sfd);
+        return;
+    }
+
     int tid = (last_thread + 1) % settings.num_threads;
 
     LIBEVENT_THREAD *thread = threads + tid;
 
     last_thread = tid;
-
-    item->sfd = sfd;
-    item->parent_port = parent_port;
-    item->init_state = init_state;
 
     cq_push(thread->new_conn_queue, item);
 
