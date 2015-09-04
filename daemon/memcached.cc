@@ -173,7 +173,7 @@ static SERVER_HANDLE_V1 *get_server_api(void);
 
 /* stats */
 static void stats_init(void);
-static void server_stats(ADD_STAT add_stats, Connection *c);
+static ENGINE_ERROR_CODE server_stats(ADD_STAT add_stats, Connection *c);
 static void process_stat_settings(ADD_STAT add_stats, void *c);
 static void process_bucket_details(Connection *c);
 
@@ -4075,7 +4075,7 @@ static void stat_executor(Connection *c, void *packet)
             ret = c->getBucketEngine()->get_stats(c->getBucketEngineAsV0(), c,
                                               NULL, 0, append_stats);
             if (ret == ENGINE_SUCCESS) {
-                server_stats(&append_stats, c);
+                ret = server_stats(&append_stats, c);
             }
         } else if (strncmp(subcommand, "reset", 5) == 0) {
             stats_reset(c);
@@ -4095,7 +4095,7 @@ static void stat_executor(Connection *c, void *packet)
         } else if (nkey == 14 && strncmp(subcommand, "bucket details", 14) == 0) {
             process_bucket_details(c);
         } else if (strncmp(subcommand, "aggregate", 9) == 0) {
-            server_stats(&append_stats, c);
+            ret = server_stats(&append_stats, c);
         } else if (strncmp(subcommand, "connections", 11) == 0) {
             int64_t fd = -1; /* default to all connections */
             /* Check for specific connection number - allow up to 32 chars for FD */
@@ -4122,9 +4122,13 @@ static void stat_executor(Connection *c, void *packet)
             if (ret == ENGINE_SUCCESS) {
                 char key[] = "topkeys_json";
                 char *topkeys_str = cJSON_PrintUnformatted(topkeys_doc);
-                append_stats(key, (uint16_t)strlen(key),
-                             topkeys_str, (uint32_t)strlen(topkeys_str), c);
-                cJSON_Free(topkeys_str);
+                if (topkeys_str != nullptr) {
+                    append_stats(key, (uint16_t)strlen(key),
+                                 topkeys_str, (uint32_t)strlen(topkeys_str), c);
+                    cJSON_Free(topkeys_str);
+                } else {
+                    ret = ENGINE_ENOMEM;
+                }
             }
             cJSON_Delete(topkeys_doc);
 
@@ -5162,12 +5166,47 @@ void write_and_free(Connection *c, DynamicBuffer* buf) {
     }
 }
 
+// Generic add_stat<T>. Uses std::to_string which requires heap allocation.
 template <typename T>
 void add_stat(const void *cookie, ADD_STAT add_stat_callback,
               const char* name, const T &val) {
     std::string value = std::to_string(val);
     add_stat_callback(name, uint16_t(strlen(name)),
                       value.c_str(), uint32_t(value.length()), cookie);
+}
+
+// Specializations for common, integer types. Uses stack buffer for
+// int-to-string conversion.
+void add_stat(const void *cookie, ADD_STAT add_stat_callback,
+              const char* name, int32_t val) {
+    char buf[16];
+    int len = snprintf(buf, sizeof(buf), "%" PRId32, val);
+    add_stat_callback(name, uint16_t(strlen(name)),
+                      buf, uint32_t(len), cookie);
+}
+
+void add_stat(const void *cookie, ADD_STAT add_stat_callback,
+              const char* name, uint32_t val) {
+    char buf[16];
+    int len = snprintf(buf, sizeof(buf), "%" PRIu32, val);
+    add_stat_callback(name, uint16_t(strlen(name)),
+                      buf, uint32_t(len), cookie);
+}
+
+void add_stat(const void *cookie, ADD_STAT add_stat_callback,
+              const char* name, int64_t val) {
+    char buf[32];
+    int len = snprintf(buf, sizeof(buf), "%" PRId64, val);
+    add_stat_callback(name, uint16_t(strlen(name)),
+                      buf, uint32_t(len), cookie);
+}
+
+void add_stat(const void *cookie, ADD_STAT add_stat_callback,
+              const char* name, uint64_t val) {
+    char buf[32];
+    int len = snprintf(buf, sizeof(buf), "%" PRIu64, val);
+    add_stat_callback(name, uint16_t(strlen(name)),
+                      buf, uint32_t(len), cookie);
 }
 
 void add_stat(const void *cookie, ADD_STAT add_stat_callback,
@@ -5178,7 +5217,8 @@ void add_stat(const void *cookie, ADD_STAT add_stat_callback,
 
 void add_stat(const void *cookie, ADD_STAT add_stat_callback,
               const char* name, const char *value) {
-    add_stat(cookie, add_stat_callback, name, std::string(value));
+    add_stat_callback(name, uint16_t(strlen(name)),
+                      value, uint32_t(strlen(value)), cookie);
 }
 
 void add_stat(const void *cookie, ADD_STAT add_stat_callback,
@@ -5191,7 +5231,7 @@ void add_stat(const void *cookie, ADD_STAT add_stat_callback,
 }
 
 /* return server specific stats only */
-static void server_stats(ADD_STAT add_stat_callback, Connection *c) {
+static ENGINE_ERROR_CODE server_stats(ADD_STAT add_stat_callback, Connection *c) {
 #ifdef WIN32
     long pid = GetCurrentProcessId();
 #else
@@ -5202,7 +5242,7 @@ static void server_stats(ADD_STAT add_stat_callback, Connection *c) {
     struct thread_stats thread_stats;
     thread_stats.aggregate(all_buckets[c->getBucketIndex()].stats, settings.num_threads);
 
-    {
+    try {
         std::lock_guard<std::mutex> guard(stats_mutex);
 
         add_stat(c, add_stat_callback, "pid", pid);
@@ -5268,6 +5308,8 @@ static void server_stats(ADD_STAT add_stat_callback, Connection *c) {
         add_stat(c, add_stat_callback, "wbufs_loaned", thread_stats.wbufs_loaned);
         add_stat(c, add_stat_callback, "iovused_high_watermark", thread_stats.iovused_high_watermark);
         add_stat(c, add_stat_callback, "msgused_high_watermark", thread_stats.msgused_high_watermark);
+    } catch (std::bad_alloc&) {
+        return ENGINE_ENOMEM;
     }
 
     /*
@@ -5323,6 +5365,7 @@ static void server_stats(ADD_STAT add_stat_callback, Connection *c) {
         add_stat(c, add_stat_callback, "tap_vbucket_set_received",
                  tap_stats.received.vbucket_set);
     }
+    return ENGINE_SUCCESS;
 }
 
 static void process_stat_settings(ADD_STAT add_stat_callback, void *c) {
