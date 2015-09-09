@@ -308,7 +308,7 @@ extern "C"
         PROTOCOL_BINARY_CMD_DCP_NOOP = 0x5c,
         PROTOCOL_BINARY_CMD_DCP_BUFFER_ACKNOWLEDGEMENT = 0x5d,
         PROTOCOL_BINARY_CMD_DCP_CONTROL = 0x5e,
-        PROTOCOL_BINARY_CMD_DCP_RESERVED4 = 0x5f,
+        PROTOCOL_BINARY_CMD_DCP_DELTA_MUTATION = 0x5f,
         /* End DCP */
 
         PROTOCOL_BINARY_CMD_STOP_PERSISTENCE = 0x80,
@@ -1442,6 +1442,23 @@ extern "C"
         } message;
         uint8_t bytes[sizeof(protocol_binary_request_header) + 31];
     } protocol_binary_request_dcp_mutation;
+
+    typedef union {
+        struct {
+            protocol_binary_request_header header;
+            struct {
+                uint64_t by_seqno;
+                uint64_t rev_seqno;
+                uint64_t ancestor_byseqno;
+                uint32_t flags;
+                uint32_t expiration;
+                uint32_t lock_time;
+                uint16_t nmeta;
+                uint8_t nru;
+            } body;
+        } message;
+        uint8_t bytes[sizeof(protocol_binary_request_header) + 39];
+    } protocol_binary_request_dcp_delta_mutation;
 
     typedef union {
         struct {

@@ -67,6 +67,8 @@
 #include <numa.h>
 #endif
 
+#include <google/vcencoder.h>
+
 /* Forward declaration */
 bool binary_response_handler(const void *key, uint16_t keylen,
                              const void *ext, uint8_t extlen,
@@ -2226,6 +2228,109 @@ static ENGINE_ERROR_CODE dcp_message_mutation(const void* cookie,
     return ENGINE_SUCCESS;
 }
 
+static ENGINE_ERROR_CODE dcp_message_delta_mutation(const void* cookie,
+                                                    uint32_t opaque,
+                                                    item *it,
+                                                    const char* old_value,
+                                                    size_t old_vallen,
+                                                    uint64_t old_by_seqno,
+                                                    uint16_t vbucket,
+                                                    uint64_t by_seqno,
+                                                    uint64_t rev_seqno,
+                                                    uint32_t lock_time,
+                                                    const void *meta,
+                                                    uint16_t nmeta,
+                                                    uint8_t nru) {
+
+    Connection *c = const_cast<Connection *>(reinterpret_cast<const Connection *>(cookie));
+    item_info_holder info;
+    auto* packet =
+            reinterpret_cast<protocol_binary_request_dcp_delta_mutation*>(c->write.buf);
+
+    if (c->write.bytes + sizeof(packet->bytes) + nmeta >= c->write.size) {
+        /* We don't have room in the buffer */
+        return ENGINE_E2BIG;
+    }
+
+    info.info.nvalue = IOV_MAX;
+
+    if (!bucket_get_item_info(c, it, &info.info)) {
+        c->getBucketEngine()->release(c->getBucketEngineAsV0(), c, it);
+        settings.extensions.logger->log(EXTENSION_LOG_WARNING, c,
+                                        "%u: Failed to get item info", c->getId());
+        return ENGINE_FAILED;
+    }
+
+    // Encode delta.
+    // TODO: Add some policy here - minimum size before attempting to binary
+    //       diff; check resulting size is sufficiently smaller than
+    //       original, etc.
+    //       Note Probably simplest to chain into dcp_message_mutation if checks
+    //       fail.
+    std::string delta;
+    open_vcdiff::VCDiffEncoder encoder(old_value, old_vallen);
+    cb_assert(info.info.nvalue == 1); // TODO: handle more than one iov.
+    encoder.Encode(reinterpret_cast<char*>(info.info.value[0].iov_base),
+                   info.info.value[0].iov_len,
+                   &delta);
+
+    // TODO-Perf: Just use the dynamicbuffer or similar directly, remove this copy.
+    auto& delta_buf = c->getDynamicBuffer();
+    delta_buf.grow(delta.size());
+    std::memcpy(delta_buf.getRoot(), delta.data(), delta.size());
+    delta_buf.moveOffset(delta.size());
+
+#if 0
+    if (!c->reserveItem(it)) {
+        c->getBucketEngine()->release(c->getBucketEngineAsV0(), c, it);
+        settings.extensions.logger->log(EXTENSION_LOG_WARNING, c,
+                                        "%u: Failed to grow item array",
+                                        c->getId());
+        return ENGINE_FAILED;
+    }
+#endif
+
+    auto& req = packet->message.header.request;
+    req.magic =  (uint8_t)PROTOCOL_BINARY_REQ;
+    req.opcode = (uint8_t)PROTOCOL_BINARY_CMD_DCP_DELTA_MUTATION;
+    req.opaque = opaque;
+    req.vbucket = htons(vbucket);
+    req.cas = htonll(info.info.cas);
+    req.keylen = htons(info.info.nkey);
+    req.extlen = 35;
+    req.bodylen = ntohl(31 + info.info.nkey + info.info.nbytes + nmeta);
+    req.datatype = info.info.datatype;
+
+    auto& body = packet->message.body;
+    body.by_seqno = htonll(by_seqno);
+    body.rev_seqno = htonll(rev_seqno);
+    body.ancestor_byseqno = htonll(old_by_seqno);
+    body.lock_time = htonl(lock_time);
+    body.flags = info.info.flags;
+    body.expiration = htonl(info.info.exptime);
+    body.nmeta = htons(nmeta);
+    body.nru = nru;
+
+    // Header iovector
+    c->addIov(c->write.curr, sizeof(packet->bytes));
+    c->write.curr += sizeof(packet->bytes);
+    c->write.bytes += sizeof(packet->bytes);
+
+    // Key iovector
+    c->addIov(info.info.key, info.info.nkey);
+
+    // Delta (value) iovector
+    c->addIov(reinterpret_cast<void*>(delta_buf.getRoot()), delta_buf.getSize());
+
+    // metadata iovector
+    memcpy(c->write.curr, meta, nmeta);
+    c->addIov(c->write.curr, nmeta);
+    c->write.curr += nmeta;
+    c->write.bytes += nmeta;
+
+    return ENGINE_SUCCESS;
+}
+
 static ENGINE_ERROR_CODE dcp_message_deletion(const void* cookie,
                                               uint32_t opaque,
                                               const void *key,
@@ -2489,6 +2594,7 @@ static void ship_dcp_log(Connection *c) {
         dcp_message_stream_end,
         dcp_message_marker,
         dcp_message_mutation,
+        dcp_message_delta_mutation,
         dcp_message_deletion,
         dcp_message_expiration,
         dcp_message_flush,
@@ -2992,6 +3098,66 @@ static void dcp_mutation_executor(Connection *c, void *packet)
             uint16_t nmeta = ntohs(req->message.body.nmeta);
             uint32_t nvalue = ntohl(req->message.header.request.bodylen) - nkey
                 - req->message.header.request.extlen - nmeta;
+
+            ret = c->getBucketEngine()->dcp.mutation(c->getBucketEngineAsV0(), c,
+                                                 req->message.header.request.opaque,
+                                                 key, nkey, value, nvalue, cas, vbucket,
+                                                 flags, datatype, by_seqno, rev_seqno,
+                                                 expiration, lock_time,
+                                                 (char*)value + nvalue, nmeta,
+                                                 req->message.body.nru);
+        }
+
+        switch (ret) {
+        case ENGINE_SUCCESS:
+            c->setState(conn_new_cmd);
+            break;
+
+        case ENGINE_DISCONNECT:
+            c->setState(conn_closing);
+            break;
+
+        case ENGINE_EWOULDBLOCK:
+            c->setEwouldblock(true);
+            break;
+
+        default:
+            write_bin_packet(c, engine_error_2_protocol_error(ret));
+        }
+    }
+}
+
+static void dcp_delta_mutation_executor(Connection *c, void *packet)
+{
+    fprintf(stderr, "*** dcp_delta_mutation_executor\n");
+    abort();
+    auto *req = reinterpret_cast<protocol_binary_request_dcp_delta_mutation*>(packet);
+
+    if (c->getBucketEngine()->dcp.mutation == NULL) {
+        write_bin_packet(c, PROTOCOL_BINARY_RESPONSE_NOT_SUPPORTED);
+    } else {
+        ENGINE_ERROR_CODE ret = c->getAiostat();
+        c->setAiostat(ENGINE_SUCCESS);
+        c->setEwouldblock(false);
+
+        if (ret == ENGINE_SUCCESS) {
+            char *key = (char*)packet + sizeof(req->bytes);
+            uint16_t nkey = ntohs(req->message.header.request.keylen);
+            void *value = key + nkey;
+            uint64_t cas = ntohll(req->message.header.request.cas);
+            uint16_t vbucket = ntohs(req->message.header.request.vbucket);
+            uint32_t flags = req->message.body.flags;
+            uint8_t datatype = req->message.header.request.datatype;
+            uint64_t by_seqno = ntohll(req->message.body.by_seqno);
+            uint64_t rev_seqno = ntohll(req->message.body.rev_seqno);
+            uint32_t expiration = ntohl(req->message.body.expiration);
+            uint32_t lock_time = ntohl(req->message.body.lock_time);
+            uint16_t nmeta = ntohs(req->message.body.nmeta);
+            uint32_t nvalue = ntohl(req->message.header.request.bodylen) - nkey
+                - req->message.header.request.extlen - nmeta;
+
+            // Reconstruct the complete new value from the delta and the
+            // ancestor value.
 
             ret = c->getBucketEngine()->dcp.mutation(c->getBucketEngineAsV0(), c,
                                                  req->message.header.request.opaque,
@@ -4825,6 +4991,8 @@ static void setup_bin_packet_handlers(void) {
     executors[PROTOCOL_BINARY_CMD_DCP_CONTROL] = dcp_control_executor;
     executors[PROTOCOL_BINARY_CMD_DCP_STREAM_END] = dcp_stream_end_executor;
     executors[PROTOCOL_BINARY_CMD_DCP_STREAM_REQ] = dcp_stream_req_executor;
+    executors[PROTOCOL_BINARY_CMD_DCP_DELTA_MUTATION] = dcp_delta_mutation_executor;
+
     executors[PROTOCOL_BINARY_CMD_ISASL_REFRESH] = isasl_refresh_executor;
     executors[PROTOCOL_BINARY_CMD_SSL_CERTS_REFRESH] = ssl_certs_refresh_executor;
     executors[PROTOCOL_BINARY_CMD_VERBOSITY] = verbosity_executor;
@@ -7470,7 +7638,7 @@ static void initialize_binary_lookup_map(void) {
     response_handlers[PROTOCOL_BINARY_CMD_DCP_NOOP] = process_bin_dcp_response;
     response_handlers[PROTOCOL_BINARY_CMD_DCP_BUFFER_ACKNOWLEDGEMENT] = process_bin_dcp_response;
     response_handlers[PROTOCOL_BINARY_CMD_DCP_CONTROL] = process_bin_dcp_response;
-    response_handlers[PROTOCOL_BINARY_CMD_DCP_RESERVED4] = process_bin_dcp_response;
+    response_handlers[PROTOCOL_BINARY_CMD_DCP_DELTA_MUTATION] = process_bin_dcp_response;
 }
 
 /**

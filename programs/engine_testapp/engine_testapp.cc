@@ -482,7 +482,7 @@ static ENGINE_ERROR_CODE mock_dcp_open(ENGINE_HANDLE* handle,
                                        uint32_t opaque,
                                        uint32_t seqno,
                                        uint32_t flags,
-                                       void *name,
+                                       const void *name,
                                        uint16_t nname) {
     struct mock_engine *me = get_handle(handle);
     return me->the_engine->dcp.open((ENGINE_HANDLE*)me->the_engine, cookie,
@@ -1460,7 +1460,7 @@ int main(int argc, char **argv) {
         bool need_newline = false;
         for (i = 0; testcases[i].name; i++) {
             int error;
-            if (test_case != NULL && strcmp(test_case, testcases[i].name) != 0)
+            if (test_case != NULL && strstr(testcases[i].name, test_case) == NULL)
                 continue;
             if (!quiet) {
                 printf("Running [%04d/%04d]: %s...",

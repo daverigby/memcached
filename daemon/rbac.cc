@@ -496,8 +496,10 @@ int load_rbac_from_file(const char *file)
     } else {
         config_error_t err = config_load_file(file, &root);
         if (err != CONFIG_SUCCESS) {
-            fprintf(stderr, "Failed to read profiles: %s\n",
-                    config_strerror(file, err));
+            auto logger = settings.extensions.logger;
+            logger->log(EXTENSION_LOG_NOTICE, nullptr,
+                        "load_rbac_from_file: failed to read profiles: %s\n",
+                        config_strerror(file, err));
             return -1;
         }
     }
@@ -505,7 +507,9 @@ int load_rbac_from_file(const char *file)
     try {
         rbac.initialize(root);
     } catch (std::string err) {
-        std::cerr << err << std::endl;
+        auto logger = settings.extensions.logger;
+        logger->log(EXTENSION_LOG_NOTICE, nullptr, "load_rbac_from_file: failed to initialize: %s",err.c_str());
+        return -1;
     }
     cJSON_Delete(root);
     return 0;

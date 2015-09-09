@@ -126,7 +126,8 @@ TARGET_LINK_LIBRARIES(memcached
                       ${OPENSSL_LIBRARIES}
                       ${COUCHBASE_NETWORK_LIBS}
                       ${BREAKPAD_LIBRARIES}
-                      ${NUMA_LIBRARIES})
+                      ${NUMA_LIBRARIES}
+                      ${OPEN_VCDIFF_LIBRARIES})
 APPEND_MALLOC_LINKER_FLAGS(memcached)
 
 INSTALL(TARGETS memcached

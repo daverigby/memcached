@@ -34,7 +34,7 @@
                     "DCP_MUTATION",
                     "DCP_NOOP",
                     "DCP_OPEN",
-                    "DCP_RESERVED4",
+                    "DCP_DELTA_MUTATION",
                     "DCP_SET_VBUCKET_STATE",
                     "DCP_SNAPSHOT_MARKER",
                     "DCP_STREAM_END",

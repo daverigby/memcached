@@ -116,6 +116,43 @@ extern "C" {
                                       uint16_t nmeta,
                                       uint8_t nru);
 
+        /** Send a Delta Mutation
+         *
+         * A Delta Mutation is one where the previous value of the item is
+         * known, and hence it may be desirable to only send the delta between
+         * the previous and new value, instead of the complete new value.
+         *
+         * @param cookie passed on the cookie provided by step
+         * @param opaque this is the opaque requested by the consumer
+         *               in the Stream Request message
+         * @param itm the item to send. The core will call item_release on
+         *            the item when it is sent so remember to keep it around.
+         * @param old_value, old_vallen: Pointer to and length in bytes of the
+         *        old value.
+         * @param old_by_seqno: The sequence number of the old value.
+         * @param vbucket the vbucket id the message belong to
+         * @param by_seqno
+         * @param rev_seqno
+         * @param lock_time
+         * @param meta
+         * @param nmeta
+         * @paran nru the nru field used by ep-engine (may safely be ignored)
+         *
+         * @return ENGINE_WANT_MORE or ENGINE_SUCCESS upon success
+         */
+        ENGINE_ERROR_CODE (*delta_mutation)(const void* cookie,
+                                           uint32_t opaque,
+                                           item* curr_item,
+                                           const char* old_value,
+                                           size_t old_vallen,
+                                           uint64_t old_by_seqno,
+                                           uint16_t vbucket,
+                                           uint64_t by_seqno,
+                                           uint64_t rev_seqno,
+                                           uint32_t lock_time,
+                                           const void *meta,
+                                           uint16_t nmeta,
+                                           uint8_t nru);
 
         /**
          * Send a deletion
@@ -276,7 +313,7 @@ extern "C" {
                                   uint32_t opaque,
                                   uint32_t seqno,
                                   uint32_t flags,
-                                  void *name,
+                                  const void *name,
                                   uint16_t nname);
 
         ENGINE_ERROR_CODE (*add_stream)(ENGINE_HANDLE* handle,

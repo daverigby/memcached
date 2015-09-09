@@ -215,7 +215,7 @@ static ENGINE_ERROR_CODE dcp_open(ENGINE_HANDLE* handle,
                                   uint32_t opaque,
                                   uint32_t seqno,
                                   uint32_t flags,
-                                  void *name,
+                                  const void *name,
                                   uint16_t nname)
 {
     return ENGINE_NO_BUCKET;
