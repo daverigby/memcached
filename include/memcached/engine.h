@@ -309,6 +309,14 @@ extern "C" {
                                  const int nkey,
                                  uint16_t vbucket);
 
+
+        ENGINE_ERROR_CODE (*get_replica)(ENGINE_HANDLE* handle,
+                                        const void* cookie,
+                                        item** item,
+                                        const void* key,
+                                        const int nkey,
+                                        uint16_t vbucket);
+
         /**
          * Store an item.
          *

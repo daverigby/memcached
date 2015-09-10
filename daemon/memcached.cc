@@ -68,6 +68,7 @@
 #endif
 
 #include <google/vcencoder.h>
+#include <google/vcdecoder.h>
 
 /* Forward declaration */
 bool binary_response_handler(const void *key, uint16_t keylen,
@@ -2238,7 +2239,7 @@ static ENGINE_ERROR_CODE dcp_message_delta_mutation(const void* cookie,
                                                     uint64_t by_seqno,
                                                     uint64_t rev_seqno,
                                                     uint32_t lock_time,
-                                                    const void *meta,
+                                                    const char* meta,
                                                     uint16_t nmeta,
                                                     uint8_t nru) {
 
@@ -2262,17 +2263,37 @@ static ENGINE_ERROR_CODE dcp_message_delta_mutation(const void* cookie,
     }
 
     // Encode delta.
-    // TODO: Add some policy here - minimum size before attempting to binary
-    //       diff; check resulting size is sufficiently smaller than
-    //       original, etc.
-    //       Note Probably simplest to chain into dcp_message_mutation if checks
-    //       fail.
     std::string delta;
     open_vcdiff::VCDiffEncoder encoder(old_value, old_vallen);
     cb_assert(info.info.nvalue == 1); // TODO: handle more than one iov.
     encoder.Encode(reinterpret_cast<char*>(info.info.value[0].iov_base),
                    info.info.value[0].iov_len,
                    &delta);
+
+    // TODO: Add better policy here - minimum size before attempting to binary
+    //       diff; check resulting size is sufficiently smaller than
+    //       original, etc.
+    if (delta.size() > info.info.value[0].iov_len) {
+        // Delta is bigger - just send as vanilla mutation.
+
+        // TODO: be more efficient - calling dcp_message_mutation will re-fetch
+        // the item_info which is unnecessary.
+        return dcp_message_mutation(cookie, opaque, it, vbucket, by_seqno,
+                                    rev_seqno, lock_time, meta, nmeta, nru);
+    }
+
+    // We need to reserve the Item to allow us to safely setup iovecs to data
+    // it contains (e.g. key) - otherwise when this function returns item will
+    // be invalid.
+    // This will be released once we've successfully passed the response to the
+    // kernel.
+    if (!c->reserveItem(it)) {
+        c->getBucketEngine()->release(c->getBucketEngineAsV0(), c, it);
+        settings.extensions.logger->log(EXTENSION_LOG_WARNING, c,
+                                        "%u: Failed to grow item array",
+                                        c->getId());
+        return ENGINE_FAILED;
+    }
 
     // TODO-Perf: Just use the dynamicbuffer or similar directly, remove this copy.
     auto& delta_buf = c->getDynamicBuffer();
@@ -2297,8 +2318,8 @@ static ENGINE_ERROR_CODE dcp_message_delta_mutation(const void* cookie,
     req.vbucket = htons(vbucket);
     req.cas = htonll(info.info.cas);
     req.keylen = htons(info.info.nkey);
-    req.extlen = 35;
-    req.bodylen = ntohl(31 + info.info.nkey + info.info.nbytes + nmeta);
+    req.extlen = 39;
+    req.bodylen = ntohl(39 + info.info.nkey + delta.size() + nmeta);
     req.datatype = info.info.datatype;
 
     auto& body = packet->message.body;
@@ -2320,7 +2341,7 @@ static ENGINE_ERROR_CODE dcp_message_delta_mutation(const void* cookie,
     c->addIov(info.info.key, info.info.nkey);
 
     // Delta (value) iovector
-    c->addIov(reinterpret_cast<void*>(delta_buf.getRoot()), delta_buf.getSize());
+    c->addIov(reinterpret_cast<void*>(delta_buf.getRoot()), delta.size());
 
     // metadata iovector
     memcpy(c->write.curr, meta, nmeta);
@@ -3127,63 +3148,150 @@ static void dcp_mutation_executor(Connection *c, void *packet)
     }
 }
 
+// DEBUG
+#include <sstream>
+#include <iomanip>
+
 static void dcp_delta_mutation_executor(Connection *c, void *packet)
 {
-    fprintf(stderr, "*** dcp_delta_mutation_executor\n");
-    abort();
     auto *req = reinterpret_cast<protocol_binary_request_dcp_delta_mutation*>(packet);
 
     if (c->getBucketEngine()->dcp.mutation == NULL) {
         write_bin_packet(c, PROTOCOL_BINARY_RESPONSE_NOT_SUPPORTED);
-    } else {
-        ENGINE_ERROR_CODE ret = c->getAiostat();
-        c->setAiostat(ENGINE_SUCCESS);
-        c->setEwouldblock(false);
+        return;
+    }
 
-        if (ret == ENGINE_SUCCESS) {
-            char *key = (char*)packet + sizeof(req->bytes);
-            uint16_t nkey = ntohs(req->message.header.request.keylen);
-            void *value = key + nkey;
-            uint64_t cas = ntohll(req->message.header.request.cas);
-            uint16_t vbucket = ntohs(req->message.header.request.vbucket);
-            uint32_t flags = req->message.body.flags;
-            uint8_t datatype = req->message.header.request.datatype;
-            uint64_t by_seqno = ntohll(req->message.body.by_seqno);
-            uint64_t rev_seqno = ntohll(req->message.body.rev_seqno);
-            uint32_t expiration = ntohl(req->message.body.expiration);
-            uint32_t lock_time = ntohl(req->message.body.lock_time);
-            uint16_t nmeta = ntohs(req->message.body.nmeta);
-            uint32_t nvalue = ntohl(req->message.header.request.bodylen) - nkey
-                - req->message.header.request.extlen - nmeta;
+    const uint32_t nbody = ntohl(req->message.header.request.bodylen);
+    const uint16_t nkey = ntohs(req->message.header.request.keylen);
+    const uint8_t datatype = req->message.header.request.datatype;
+    const uint16_t vbucket = ntohs(req->message.header.request.vbucket);
+    const uint64_t cas = ntohll(req->message.header.request.cas);
 
-            // Reconstruct the complete new value from the delta and the
-            // ancestor value.
+    const uint64_t by_seqno = ntohll(req->message.body.by_seqno);
+    const uint64_t rev_seqno = ntohll(req->message.body.rev_seqno);
+    const uint64_t ancestor_byseqno = ntohll(req->message.body.ancestor_byseqno);
+    const uint32_t flags = req->message.body.flags;
+    const uint32_t expiration = ntohl(req->message.body.expiration);
+    const uint32_t lock_time = ntohl(req->message.body.lock_time);
+    const uint16_t nmeta = ntohs(req->message.body.nmeta);
+    const uint8_t nru = req->message.body.nru;
 
-            ret = c->getBucketEngine()->dcp.mutation(c->getBucketEngineAsV0(), c,
-                                                 req->message.header.request.opaque,
-                                                 key, nkey, value, nvalue, cas, vbucket,
-                                                 flags, datatype, by_seqno, rev_seqno,
-                                                 expiration, lock_time,
-                                                 (char*)value + nvalue, nmeta,
-                                                 req->message.body.nru);
-        }
+    const uint32_t ndelta = (nbody - nkey -
+                             req->message.header.request.extlen - nmeta);
 
-        switch (ret) {
-        case ENGINE_SUCCESS:
-            c->setState(conn_new_cmd);
-            break;
+    const char* key = (char*)packet + sizeof(req->bytes);
+    const char* delta_ptr = key + nkey;
+    const char* meta = delta_ptr + ndelta;
 
-        case ENGINE_DISCONNECT:
-            c->setState(conn_closing);
-            break;
+    ENGINE_ERROR_CODE ret = c->getAiostat();
+    c->setAiostat(ENGINE_SUCCESS);
+    c->setEwouldblock(false);
 
-        case ENGINE_EWOULDBLOCK:
-            c->setEwouldblock(true);
-            break;
+    item* item = NULL;
+    if (ret == ENGINE_SUCCESS) {
+        ret = c->getBucketEngine()->get_replica(c->getBucketEngineAsV0(), c,
+                                                &item, key, nkey,
+                                                vbucket);
+    }
 
-        default:
-            write_bin_packet(c, engine_error_2_protocol_error(ret));
-        }
+    switch (ret) {
+    case ENGINE_SUCCESS:
+        break;
+    case ENGINE_EWOULDBLOCK:
+        c->setEwouldblock(true);
+        return;
+
+    case ENGINE_DISCONNECT:
+        c->setState(conn_closing);
+        return;
+
+    default:
+        write_bin_packet(c, engine_error_2_protocol_error(ret));
+        return;
+    }
+
+    // Got the replica, fetch item_info to verify seqno and obtain
+    // ancestor value.
+    item_info_holder info;
+    info.info.nvalue = IOV_MAX;
+    if (!bucket_get_item_info(c, item, &info.info)) {
+
+        settings.extensions.logger->log(
+                EXTENSION_LOG_WARNING, c,
+                "%u: Delta mutation: get_item_info failed", c->getId());
+
+        c->getBucketEngine()->release(c->getBucketEngineAsV0(), c, item);
+        write_bin_packet(c, PROTOCOL_BINARY_RESPONSE_EINTERNAL);
+        return;
+    }
+
+    // Verify that the current seqno we have matches what was sent
+    // in the delta.
+    if (info.info.seqno != ancestor_byseqno) {
+        settings.extensions.logger->log(
+                EXTENSION_LOG_WARNING, c,
+                "%u: Delta mutation: ancestor seqno (which is %" PRIu64
+                ") does not equal current item seqno (which is %" PRIu64
+                ")", c->getId(), ancestor_byseqno, info.info.seqno);
+
+        c->getBucketEngine()->release(c->getBucketEngineAsV0(), c, item);
+        write_bin_packet(c, PROTOCOL_BINARY_RESPONSE_KEY_EEXISTS);
+        return;
+    }
+
+    // Apply delta to ancestor to obtain the new value.
+    std::string delta(delta_ptr, ndelta);
+    std::string new_value;
+    open_vcdiff::VCDiffDecoder decoder;
+    cb_assert(info.info.nvalue == 1); // TODO: handle more than one iov.
+    bool res = decoder.Decode(reinterpret_cast<char*>(info.info.value[0].iov_base),
+                              info.info.value[0].iov_len,
+                              delta, &new_value);
+    cb_assert(res);
+
+    std::stringstream ss;
+    for (char byte : delta) {
+        ss << std::hex << std::setw(2) << std::setfill('0') << uint16_t(uint8_t(byte));
+        ss << ' ';
+    }
+
+    settings.extensions.logger->log(
+            EXTENSION_LOG_DEBUG, c,
+            "%u: Delta mutation:\n"
+            "\tancestor:'%.*s' (len:%d)\n"
+            "\tdelta:   '%.*s' (len:%d)\n"
+            "\tnew:     '%.*s' (len:%d)\n",
+            c->getId(),
+            std::min(size_t(40), info.info.value[0].iov_len),
+            info.info.value[0].iov_base, info.info.value[0].iov_len,
+            std::min(size_t(40), delta.size()), ss.str().c_str(), delta.size(),
+            std::min(size_t(40), new_value.size()), new_value.c_str(), new_value.size());
+
+    // And pass down as a 'normal' mutation
+    ret = c->getBucketEngine()->dcp.mutation(c->getBucketEngineAsV0(), c,
+                                         req->message.header.request.opaque,
+                                         key, nkey, new_value.c_str(),
+                                         new_value.size(), cas, vbucket,
+                                         flags, datatype, by_seqno, rev_seqno,
+                                         expiration, lock_time,
+                                         meta, nmeta,
+                                         nru);
+
+    switch (ret) {
+    case ENGINE_SUCCESS:
+        c->setState(conn_new_cmd);
+        break;
+
+    case ENGINE_DISCONNECT:
+        c->setState(conn_closing);
+        break;
+
+    case ENGINE_EWOULDBLOCK:
+        c->setEwouldblock(true);
+        break;
+
+    default:
+        write_bin_packet(c, engine_error_2_protocol_error(ret));
     }
 }
 

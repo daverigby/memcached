@@ -150,7 +150,7 @@ extern "C" {
                                            uint64_t by_seqno,
                                            uint64_t rev_seqno,
                                            uint32_t lock_time,
-                                           const void *meta,
+                                           const char *meta,
                                            uint16_t nmeta,
                                            uint8_t nru);
 
@@ -391,6 +391,26 @@ extern "C" {
                                       const void *meta,
                                       uint16_t nmeta,
                                       uint8_t nru);
+
+        /**
+         * Callback to the engine that a delta mutation message was received
+         */
+        ENGINE_ERROR_CODE (*delta_mutation)(ENGINE_HANDLE* handle,
+                                            const void* cookie,
+                                            uint32_t opaque,
+                                            const char *key, uint16_t nkey,
+                                            const char *delta, uint32_t ndelta,
+                                            uint64_t cas,
+                                            uint16_t vbucket,
+                                            uint32_t flags,
+                                            uint8_t datatype,
+                                            uint64_t by_seqno,
+                                            uint64_t ancestor_by_seqno,
+                                            uint64_t rev_seqno,
+                                            uint32_t expiration,
+                                            uint32_t lock_time,
+                                            const char *meta, uint16_t nmeta,
+                                            uint8_t nru);
 
         /**
          * Callback to the engine that a deletion message was received
