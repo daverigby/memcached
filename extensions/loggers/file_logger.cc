@@ -368,7 +368,13 @@ static FILE *open_logfile(const char *fnm) {
     } while (access(fname, F_OK) == 0);
     ret = iops.open(fname, "wb");
     if (!ret) {
-        fprintf(stderr, "Failed to open memcached log file\n");
+        // Can't open the logfile. We already output messages of
+        // sufficient level to stderr, let's hope that's enough.
+        fprintf(stderr, "Failed to open memcached log file '%s': %s. "
+                "Disabling file logging.\n",
+                fname, strerror(errno));
+
+        return NULL;
     }
     return ret;
 }
@@ -387,18 +393,28 @@ static FILE *reopen_logfile(FILE *old, const char *fnm) {
 static size_t flush_pending_io(FILE *file, struct logbuffer *lb) {
     size_t ret = 0;
     if (lb->offset > 0) {
-        char *ptr = lb->data;
-        size_t towrite = ret = lb->offset;
-
-        while (towrite > 0) {
-            int nw = iops.write(file, ptr, towrite);
-            if (nw > 0) {
-                ptr += nw;
-                towrite -= nw;
+        if (file) {
+            char *ptr = lb->data;
+            size_t towrite = ret = lb->offset;
+            while (towrite > 0) {
+                int nw = iops.write(file, ptr, towrite);
+                if (nw > 0) {
+                    ptr += nw;
+                    towrite -= nw;
+                }
             }
+            lb->offset = 0;
+            iops.flush(file);
+        } else {
+            // Cannot write as have no FD, however we also don't want
+            // to leave the logbuffer as-is as that would result in it
+            // filling up and producers being deadlocked. Therefore
+            // discard the logbuffer contents.
+            // Note that any message at output_level is always logged
+            // to stderr (for babysitter) so those messages will not
+            // be lost.
+            lb->offset = 0;
         }
-        lb->offset = 0;
-        iops.flush(file);
     }
 
     return ret;
@@ -419,7 +435,6 @@ static FILE *fp;
 static void logger_thead_main(void* arg)
 {
     size_t currsize = 0;
-    fp = open_logfile(reinterpret_cast<const char*>(arg));
 
     struct timeval tp;
     cb_get_timeofday(&tp);
@@ -439,6 +454,12 @@ static void logger_thead_main(void* arg)
 
             /* Perform file IO without the lock */
             cb_mutex_exit(&mutex);
+
+            /* In case we failed to open the log file last time (e.g. EMFILE),
+               re-attempt now. */
+            if (fp == NULL) {
+                fp = open_logfile(reinterpret_cast<const char*>(arg));
+            }
 
             currsize += flush_pending_io(fp, buffers + curr);
             if (currsize > cyclesz) {
