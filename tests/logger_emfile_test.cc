@@ -51,25 +51,46 @@ int main() {
         exit(2);
     }
 
-    // Consume all available FD so we cannot open any more files.
+    // Open the logger
+    EXTENSION_ERROR_CODE ret = memcached_extensions_initialize(
+            "unit_test=true;loglevel=warning;cyclesize=200;"
+            "buffersize=100;sleeptime=1;filename=log_test_emfile",
+            get_server_api);
+    cb_assert(ret == EXTENSION_SUCCESS);
+
+    // Wait for first log file to be created, and open it
+    FILE* initial_log_file;
+    while ((initial_log_file = std::fopen("log_test_emfile.0.txt", "r")) == NULL) {
+        usleep(10);
+    }
+
+    // Consume all available FD so we cannot open any more files
+    // (i.e. rotation will fail).
     std::vector<FILE*> FDs;
     FILE* file;
     while ((file = std::fopen(".", "r")) != NULL) {
         FDs.emplace_back(file);
     }
 
-    // Open the logger
-    EXTENSION_ERROR_CODE ret = memcached_extensions_initialize(
-            "unit_test=true;loglevel=warning;cyclesize=128;"
-            "buffersize=128;sleeptime=1;filename=log_test_emfile",
-            get_server_api);
-    cb_assert(ret == EXTENSION_SUCCESS);
-
-    // Print at least two lines to cause log rotation to occur.
-    for (int ii = 0; ii < 2; ii++) {
+    // Repeatedly print lines, waiting for the rotation failure message to show up.
+    char* line_ptr = NULL;
+    size_t line_sz = 0;
+    while (true) {
         logger->log(EXTENSION_LOG_DETAIL, NULL,
-                    "test_emfile: Should not be logged as we have run out of FDs");
+                   "test_emfile: Log line which should be in log_test_emfile.0.log");
+
+        if (getline(&line_ptr, &line_sz, initial_log_file) > 0) {
+            fprintf(stderr, "Got line: %s", line_ptr);
+            fflush(stderr);
+            if (strstr(line_ptr, "Failed to open next logfile") != NULL) {
+                break;
+            } else {
+                perror("getline() failed:");
+            }
+        }
+        usleep(10);
     }
+    free(line_ptr);
 
     // Close extra FDs so we can now print.
     for (auto f : FDs) {
