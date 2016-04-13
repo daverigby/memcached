@@ -202,6 +202,18 @@ size_t mcbp_storage_command(char* buf,
     return key_offset + keylen + dtalen;
 }
 
+off_t mcbp_range_command(char* buf,
+                         size_t bufsz,
+                         uint8_t cmd,
+                         const std::string& start_key,
+                         const std::string& end_key) {
+    /* all of the storage commands use the same command layout */
+    off_t key_offset;
+    protocol_binary_request_rangeop* request =
+        reinterpret_cast<protocol_binary_request_rangeop*>(buf);
+
+    // TODO: Complete - see mcbp_storage_command etc.
+}
 void mcbp_validate_response_header(protocol_binary_response_no_extras* response,
                                    uint8_t cmd, uint16_t status) {
     protocol_binary_response_header* header = &response->message.header;

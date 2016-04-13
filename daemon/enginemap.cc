@@ -116,11 +116,15 @@ bool initialize_engine_map(char **msg, EXTENSION_LOGGER_DESCRIPTOR *logger)
             map[BucketType::EWouldBlock] = createEngine("ewouldblock_engine.so",
                                                         "create_instance",
                                                         logger);
-        } else {
-            map[BucketType::Couchstore] = createEngine("ep.so",
-                                                       "create_instance",
-                                                       logger);
         }
+//        map[BucketType::Couchstore] = createEngine("ep.so",
+//                                                   "create_instance",
+//                                                   logger);
+//
+        map[BucketType::Index] = createEngine("index_engine.so",
+                                                   "create_instance",
+                                                   logger);
+
     } catch (const std::string &str) {
         *msg = strdup(str.c_str());
         return false;

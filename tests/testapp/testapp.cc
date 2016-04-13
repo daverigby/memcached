@@ -126,8 +126,7 @@ void TestappTest::CreateTestBucket()
 
     char cfg[80];
     memset(cfg, 0, sizeof(cfg));
-    snprintf(cfg, sizeof(cfg), "ewouldblock_engine.so%cdefault_engine.so", 0);
-
+    snprintf(cfg, sizeof(cfg), "index_engine.so");
     Frame request;
     mcbp_raw_command(request, PROTOCOL_BINARY_CMD_CREATE_BUCKET,
                      "default", strlen("default"), cfg, sizeof(cfg));
@@ -1064,6 +1063,7 @@ bool safe_recv_packet(void *buf, size_t size) {
 void TestappTest::ewouldblock_engine_configure(ENGINE_ERROR_CODE err_code,
                                                const EWBEngineMode& mode,
                                                uint32_t value) {
+    return;
     union {
         request_ewouldblock_ctl request;
         protocol_binary_response_no_extras response;
@@ -4376,6 +4376,32 @@ TEST_P(McdTestappTest, test_MB_17506_dedupe) {
     EXPECT_EQ(0, buffer.response.message.header.response.bodylen);
 }
 
+TEST_P(McdTestappTest, HelloWorld) {
+    store_object("a", "a");
+    store_object("b", "b");
+    store_object("c", "c");
+
+    union {
+        protocol_binary_request_no_extras request;
+        protocol_binary_response_no_extras response;
+        char bytes[1024];
+    } buffer;
+
+    // Bodylen deliberatley set to less than keylen.
+    // This packet should be rejected.
+    // TODO: replace with mcbp_range_command()
+#if 0
+    size_t plen = mcbp_raw_command(buffer.bytes, sizeof(buffer.bytes),
+                                   PROTOCOL_BINARY_CMD_RGET,
+                                   chosenmech, strlen(chosenmech)/*keylen*/,
+                                   data, 1/*bodylen*/);
+
+    safe_send(buffer.bytes, plen, false);
+    safe_recv_packet(&buffer, sizeof(buffer));
+    mcbp_validate_response_header(&buffer.response, PROTOCOL_BINARY_CMD_SASL_AUTH,
+                                  PROTOCOL_BINARY_RESPONSE_EINVAL);
+#endif
+}
 
 INSTANTIATE_TEST_CASE_P(Transport,
                         McdTestappTest,

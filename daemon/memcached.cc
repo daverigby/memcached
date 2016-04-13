@@ -696,6 +696,9 @@ static cJSON *get_bucket_details_UNLOCKED(const Bucket& bucket, int idx) {
     case BucketType::EWouldBlock:
         cJSON_AddStringToObject(root, "type", "ewouldblock");
         break;
+    case BucketType::Index:
+        cJSON_AddStringToObject(root, "type", "index");
+        break;
     }
 
     return root;

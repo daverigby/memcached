@@ -49,6 +49,7 @@ enum class BucketType : uint8_t {
     NoBucket,
     Memcached,
     Couchstore,
+    Index,
     EWouldBlock
 };
 
@@ -64,6 +65,8 @@ inline const char *to_string(const BucketType &type) {
         return "No Bucket";
     case BucketType::Unknown:
         return "Uknown";
+    case BucketType::Index:
+        return "Index";
     }
     throw std::logic_error("Invalid bucket type: " + std::to_string(int(type)));
 }
