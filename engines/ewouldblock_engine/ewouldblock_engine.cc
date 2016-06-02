@@ -414,6 +414,15 @@ public:
         }
     }
 
+    static TAP_ITERATOR get_tap_iterator(ENGINE_HANDLE* handle,
+                                         const void* cookie, const void* client,
+                                         size_t nclient, uint32_t flags,
+                                         const void* userdata,
+                                         size_t nuserdata) {
+        return tap_iterator;
+    }
+
+
     static void item_set_cas(ENGINE_HANDLE *handle, const void* cookie,
                              item* item, uint64_t cas) {
         // Should never be called as ENGINE_HANDLE_V1::item_set_cas is updated
@@ -469,6 +478,34 @@ private:
 
     // Handle of the notification thread.
     cb_thread_t notification_thread;
+
+    /* Tap iterator function, as returned by get_tap_iterator.
+     * Currently just returns a sequence of NOOPS forever.
+     */
+    static tap_event_t tap_iterator(ENGINE_HANDLE* handle,
+                                    const void *cookie,
+                                    item **item,
+                                    void **engine_specific,
+                                    uint16_t *nengine_specific,
+                                    uint8_t *ttl,
+                                    uint16_t *flags,
+                                    uint32_t *seqno,
+                                    uint16_t *vbucket) {
+        EWB_Engine* ewb = to_engine(handle);
+
+        // Set a key and value for the tap mutation
+        ewb->dcp_mutation_item.key = "tap_mutation";
+        ewb->dcp_mutation_item.value.resize(128 * 1024);
+        *item = &ewb->dcp_mutation_item;
+        *engine_specific = nullptr;
+        *nengine_specific = 0;
+        *ttl = -1;
+        *flags = 0;
+        *seqno = 0;
+        *vbucket = 0;
+
+        return TAP_MUTATION;
+    }
 
     // Base class for all fault injection modes.
     struct FaultInjectMode {
@@ -667,7 +704,7 @@ EWB_Engine::EWB_Engine(GET_SERVER_API gsa_)
     ENGINE_HANDLE_V1::aggregate_stats = NULL;
     ENGINE_HANDLE_V1::unknown_command = unknown_command;
     ENGINE_HANDLE_V1::tap_notify = NULL;
-    ENGINE_HANDLE_V1::get_tap_iterator = NULL;
+    ENGINE_HANDLE_V1::get_tap_iterator = get_tap_iterator;
     ENGINE_HANDLE_V1::item_set_cas = item_set_cas;
     ENGINE_HANDLE_V1::get_item_info = get_item_info;
     ENGINE_HANDLE_V1::set_item_info = set_item_info;
