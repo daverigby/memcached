@@ -102,7 +102,7 @@ public:
 
     virtual const char* what() const NOEXCEPT override {
         std::string msg(std::runtime_error::what());
-        msg.append(" ");
+        msg.append(" reason:");
         msg.append(std::to_string(reason));
         return msg.c_str();
     }
@@ -272,6 +272,21 @@ public:
      * Form a Frame representing a CMD_GET
      */
     virtual Frame encodeCmdGet(const std::string& id, uint16_t vbucket) = 0;
+
+    /*
+     * Form a Frame representing a CMD_TAP_CONNECT
+     */
+    virtual Frame encode_cmd_tap_connect() = 0;
+
+    /*
+     * Form a Frame representing a CMD_DCP_OPEN
+     */
+    virtual Frame encode_cmd_dcp_open() = 0;
+
+    /*
+     * Form a Frame representing a CMD_DCP_STREAM_REQ
+     */
+    virtual Frame encode_cmd_dcp_stream_req() = 0;
 
     /**
      * Perform the mutation on the attached document.

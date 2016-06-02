@@ -1984,7 +1984,7 @@ void DestroyBucketThread::destroy() {
     cb_mutex_enter(&all_buckets[idx].mutex);
     while (all_buckets[idx].clients > 0) {
         LOG_NOTICE(connection,
-                   "%u Delete bucket [%s]. Still waiting: %u clients connected",
+                   "%s Delete bucket [%s]. Still waiting: %u clients connected",
                    connection_id.c_str(), name.c_str(), all_buckets[idx].clients);
         /* drop the lock and notify the worker threads */
         cb_mutex_exit(&all_buckets[idx].mutex);

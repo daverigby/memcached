@@ -688,8 +688,8 @@ private:
     // Mutex for above map.
     std::mutex cookie_map_mutex;
 
-    // Current DCP mutation `item`. We return the address of this
-    // (in the dcp step() function) back to the server, and then in
+    // Current TAP/DCP mutation `item`. We return the address of this from the
+    // tap iterator / dcp step() function back to the server, and then in
     // get_item_info we check if the requested item is this one.
     struct {
         std::string key;

@@ -84,6 +84,12 @@ public:
 
     Frame encodeCmdGet(const std::string& id, uint16_t vbucket) override;
 
+    Frame encode_cmd_tap_connect() override;
+
+    Frame encode_cmd_dcp_open() override;
+
+    Frame encode_cmd_dcp_stream_req() override;
+
     virtual MutationInfo mutate(const Document& doc, uint16_t vbucket,
                                 const Greenstack::mutation_type_t type) override;
 

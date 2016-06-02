@@ -355,6 +355,21 @@ Frame MemcachedGreenstackConnection::encodeCmdGet(const std::string& id,
     return frame;
 }
 
+Frame MemcachedGreenstackConnection::encode_cmd_tap_connect() {
+    throw std::invalid_argument(
+            "MemcachedGreenstackConnection::encode_cmd_tap_connect: Not implemented");
+}
+
+Frame MemcachedGreenstackConnection::encode_cmd_dcp_open() {
+    throw std::invalid_argument(
+            "MemcachedGreenstackConnection::encode_cmd_dcp_open: Not implemented");
+}
+
+Frame MemcachedGreenstackConnection::encode_cmd_dcp_stream_req() {
+    throw std::invalid_argument(
+            "MemcachedGreenstackConnection::encode_cmd_dcp_stream_req: Not implemented");
+}
+
 MutationInfo MemcachedGreenstackConnection::mutate(const Document& doc,
                                                    uint16_t vbucket,
                                                    const Greenstack::mutation_type_t type) {
