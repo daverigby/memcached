@@ -759,12 +759,10 @@ bool is_bucket_dying(Connection *c)
 {
     bool disconnect = memcached_shutdown;
     Bucket &b = all_buckets.at(c->getBucketIndex());
-    cb_mutex_enter(&b.mutex);
 
     if (b.state != BucketState::Ready) {
         disconnect = true;
     }
-    cb_mutex_exit(&b.mutex);
 
     if (disconnect) {
         LOG_NOTICE(c,
