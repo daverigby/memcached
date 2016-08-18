@@ -21,6 +21,7 @@
 #include <stdio.h>
 #include <sys/stat.h>
 #include <gtest/gtest.h>
+#include <platform/cb_malloc.h>
 
 #include "daemon/config_util.h"
 

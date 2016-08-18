@@ -32,11 +32,11 @@ extern "C" EXPORT_SYMBOL std::string* plugin_new_string(char* str);
 extern "C" EXPORT_SYMBOL void plugin_delete_string(std::string* ptr);
 
 void* plugin_malloc(size_t size) {
-    return malloc(size);
+    return cb_malloc(size);
 }
 
 void plugin_free(void* ptr) {
-    free(ptr);
+    cb_free(ptr);
 }
 
 char* plugin_new_char_array(size_t len) {
