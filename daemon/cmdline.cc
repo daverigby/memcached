@@ -30,7 +30,7 @@ struct Option *options = NULL;
 struct Option *tail = NULL;
 
 static void add_option(int cmd, char *optarg) {
-    struct Option *o = reinterpret_cast<struct Option*>(malloc(sizeof(*o)));
+    struct Option *o = reinterpret_cast<struct Option*>(cb_malloc(sizeof(*o)));
     if (o == NULL) {
         fprintf(stderr, "Failed to allocate memory\n");
         exit(EXIT_FAILURE);
@@ -229,7 +229,7 @@ void parse_arguments(int argc, char **argv) {
         while (options) {
             tail = options;
             options = options->next;
-            free(tail);
+            cb_free(tail);
         }
     }
 }
