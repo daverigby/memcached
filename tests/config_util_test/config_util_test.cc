@@ -21,6 +21,7 @@
 #include <stdio.h>
 #include <sys/stat.h>
 #include <gtest/gtest.h>
+#include <platform/cb_malloc.h>
 
 #include "daemon/config_util.h"
 
@@ -179,6 +180,6 @@ TEST(ConfigUtil, ConfigStrerror)
     for (ii = 0; ii < 1000; ++ii) {
         char *msg = config_strerror("foo", (config_error_t)ii);
         EXPECT_TRUE(msg != nullptr);
-        free(msg);
+        cb_free(msg);
     }
 }
