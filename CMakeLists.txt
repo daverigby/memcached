@@ -149,7 +149,9 @@ ELSE ()
          ${Memcached_SOURCE_DIR}/daemon/alloc_hooks_dummy.cc)
 ENDIF ()
 
-LIST(APPEND MEMORY_TRACKING_SRCS ${Memcached_SOURCE_DIR}/daemon/alloc_hooks.h)
+LIST(APPEND MEMORY_TRACKING_SRCS
+     ${Memcached_SOURCE_DIR}/daemon/alloc_hooks.h
+     ${Memcached_SOURCE_DIR}/daemon/global_new_replacement.cc)
 
 IF (APPLE)
     LIST(APPEND MEMORY_TRACKING_SRCS
