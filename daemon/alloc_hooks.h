@@ -6,8 +6,11 @@
 #include "alloc_hooks_dummy.h"
 #include "alloc_hooks_jemalloc.h"
 #include "alloc_hooks_tcmalloc.h"
+#include "alloc_hooks_whynotboth.h"
 
-#if defined(HAVE_JEMALLOC)
+#if defined(HAVE_JEMALLOC) and defined(HAVE_TCMALLOC)
+using AllocHooks = WhyNotBothHooks;
+#elif defined(HAVE_JEMALLOC)
 using AllocHooks = JemallocHooks;
 #elif defined(HAVE_TCMALLOC)
 using AllocHooks = TCMallocHooks;

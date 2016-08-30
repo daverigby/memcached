@@ -32,19 +32,19 @@ void DummyAllocHooks::initialize() {
                              "allocator hooks for accurate memory tracking");
 }
 
-bool DummyAllocHooks::add_new_hook(void (* hook)(const void* ptr, size_t size)) {
+bool DummyAllocHooks::add_new_hook(void (* hook)(const void* ptr, size_t size, int tag)) {
     return false;
 }
 
-bool DummyAllocHooks::remove_new_hook(void (* hook)(const void* ptr, size_t size)) {
+bool DummyAllocHooks::remove_new_hook(void (* hook)(const void* ptr, size_t size, int tag)) {
     return false;
 }
 
-bool DummyAllocHooks::add_delete_hook(void (* hook)(const void* ptr)) {
+bool DummyAllocHooks::add_delete_hook(void (* hook)(const void* ptr, int tag)) {
     return false;
 }
 
-bool DummyAllocHooks::remove_delete_hook(void (* hook)(const void* ptr)) {
+bool DummyAllocHooks::remove_delete_hook(void (* hook)(const void* ptr, int tag)) {
     return false;
 }
 

@@ -17,7 +17,14 @@
 
 #pragma once
 
-#include <stddef.h>
+#include "config.h"
 
-typedef void (*malloc_new_hook_t)(const void *ptr, size_t sz, int tag);
-typedef void (*malloc_delete_hook_t)(const void *ptr, int tag);
+#include "alloc_hooks_types.h"
+#include <memcached/allocator_hooks.h>
+
+class WhyNotBothHooks {
+public:
+#define X(name, ret, args) static ret name args;
+#include "alloc_hooks.def"
+#undef X
+};

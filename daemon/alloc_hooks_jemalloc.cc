@@ -53,6 +53,7 @@ const char* je_malloc_conf =
     /* Use just one arena, instead of the default based on number of CPUs.
        Helps to minimize heap fragmentation. */
     "narenas:1";
+//,stats_print:true";
 
 static malloc_new_hook_t new_hook = NULL;
 static malloc_delete_hook_t delete_hook = NULL;
@@ -171,7 +172,7 @@ void JemallocHooks::initialize() {
 #endif
 }
 
-bool JemallocHooks::add_new_hook(void (* hook)(const void* ptr, size_t size)) {
+bool JemallocHooks::add_new_hook(void (* hook)(const void* ptr, size_t size, int tag)) {
     if (new_hook == NULL) {
         new_hook = hook;
         return true;
@@ -180,7 +181,7 @@ bool JemallocHooks::add_new_hook(void (* hook)(const void* ptr, size_t size)) {
     }
 }
 
-bool JemallocHooks::remove_new_hook(void (* hook)(const void* ptr, size_t size)) {
+bool JemallocHooks::remove_new_hook(void (* hook)(const void* ptr, size_t size, int tag)) {
     if (new_hook == hook) {
         new_hook = NULL;
         return true;
@@ -189,7 +190,7 @@ bool JemallocHooks::remove_new_hook(void (* hook)(const void* ptr, size_t size))
     }
 }
 
-bool JemallocHooks::add_delete_hook(void (* hook)(const void* ptr)) {
+bool JemallocHooks::add_delete_hook(void (* hook)(const void* ptr, int tag)) {
     if (delete_hook == NULL) {
         delete_hook = hook;
         return true;
@@ -198,7 +199,7 @@ bool JemallocHooks::add_delete_hook(void (* hook)(const void* ptr)) {
     }
 }
 
-bool JemallocHooks::remove_delete_hook(void (* hook)(const void* ptr)) {
+bool JemallocHooks::remove_delete_hook(void (* hook)(const void* ptr, int tag)) {
     if (delete_hook == hook) {
         delete_hook = NULL;
         return true;

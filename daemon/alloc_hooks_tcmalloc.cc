@@ -41,20 +41,41 @@ void TCMallocHooks::initialize() {
     }
 }
 
-bool TCMallocHooks::add_new_hook(void (* hook)(const void* ptr, size_t size)) {
-    return MallocHook_AddNewHook(hook) ? true : false;
+
+// Shim functions which we register with TCMalloc on behalf of the user's
+// NewHook/DeleteHook. Invokes the users hook with a tag of TCMALLOC.
+static malloc_new_hook_t user_new_hook;
+static malloc_delete_hook_t user_delete_hook;
+
+static void tcmalloc_new_shim(const void* ptr, size_t size) {
+    user_new_hook(ptr, size, (int)MallocTag::TCMalloc);
+}
+static void tcmalloc_delete_shim(const void* ptr) {
+    user_delete_hook(ptr, (int)MallocTag::TCMalloc);
 }
 
-bool TCMallocHooks::remove_new_hook(void (* hook)(const void* ptr, size_t size)) {
-    return MallocHook_RemoveNewHook(hook) ? true : false;
+bool TCMallocHooks::add_new_hook(void (* hook)(const void* ptr, size_t size,
+                                               int tag)) {
+    user_new_hook = hook;
+    return MallocHook_AddNewHook(tcmalloc_new_shim) ? true : false;
 }
 
-bool TCMallocHooks::add_delete_hook(void (* hook)(const void* ptr)) {
-    return MallocHook_AddDeleteHook(hook) ? true : false;
+bool TCMallocHooks::remove_new_hook(void (* hook)(const void* ptr, size_t size,
+                                                  int tag)) {
+    user_new_hook = nullptr;
+    return MallocHook_RemoveNewHook(tcmalloc_new_shim) ? true : false;
 }
 
-bool TCMallocHooks::remove_delete_hook(void (* hook)(const void* ptr)) {
-    return MallocHook_RemoveDeleteHook(hook) ? true : false;
+bool TCMallocHooks::add_delete_hook(void (* hook)(const void* ptr,
+                                                  int tag)) {
+    user_delete_hook = hook;
+    return MallocHook_AddDeleteHook(tcmalloc_delete_shim) ? true : false;
+}
+
+bool TCMallocHooks::remove_delete_hook(void (* hook)(const void* ptr,
+                                                     int tag)) {
+    user_delete_hook = nullptr;
+    return MallocHook_RemoveDeleteHook(tcmalloc_delete_shim) ? true : false;
 }
 
 int TCMallocHooks::get_extra_stats_size() {

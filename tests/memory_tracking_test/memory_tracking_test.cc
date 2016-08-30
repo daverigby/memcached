@@ -22,6 +22,7 @@
 #include <malloc.h>
 #endif
 #include <platform/cb_malloc.h>
+#include <vector>
 
 #include "daemon/alloc_hooks.h"
 
@@ -43,14 +44,20 @@ T get_plugin_symbol(cb_dlhandle_t handle, const char* symbol_name) {
 
 
 extern "C" {
-    static void NewHook(const void* ptr, size_t) {
+    static void NewHook(const void* ptr, size_t, int tag) {
+        if (tag == (int)MallocTag::TCMalloc) {
+            abort();
+        }
         if (ptr != NULL) {
             void* p = const_cast<void*>(ptr);
             alloc_size += AllocHooks::get_allocation_size(p);
         }
     }
 
-    static void DeleteHook(const void* ptr) {
+    static void DeleteHook(const void* ptr, int tag) {
+        if (tag == (int)MallocTag::TCMalloc) {
+            abort();
+        }
         if (ptr != NULL) {
             void* p = const_cast<void*>(ptr);
             alloc_size -= AllocHooks::get_allocation_size(p);
@@ -181,6 +188,11 @@ int main(void) {
 
    AllocHooks::remove_new_hook(NewHook);
    AllocHooks::remove_delete_hook(DeleteHook);
+
+   std::vector<char> buf;
+   buf.resize(16 * 1024);
+   mc_get_detailed_stats(buf.data(), buf.size());
+   fprintf(stderr, "%s\n", buf.data());
 
    return 0;
 }

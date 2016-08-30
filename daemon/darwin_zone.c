@@ -71,13 +71,13 @@ static void zone_destroy(malloc_zone_t *zone);
 
 static inline void invoke_new_hook(void* ptr, size_t size) {
     if (*new_hook != NULL) {
-        (*new_hook)(ptr, size);
+        (*new_hook)(ptr, size, 0);
     }
 }
 
 static inline void invoke_delete_hook(void* ptr) {
     if (*delete_hook != NULL) {
-        (*delete_hook)(ptr);
+        (*delete_hook)(ptr, 0);
     }
 }
 

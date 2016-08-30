@@ -144,6 +144,11 @@ IF (MEMORY_ALLOCATOR STREQUAL jemalloc OR MEMORY_ALLOCATOR STREQUAL tcmalloc OR
     MEMORY_ALLOCATOR STREQUAL badmalloc)
     LIST(APPEND MEMORY_TRACKING_SRCS
          ${Memcached_SOURCE_DIR}/daemon/alloc_hooks_${MEMORY_ALLOCATOR}.cc)
+ELSEIF(MEMORY_ALLOCATOR STREQUAL whynotboth)
+    LIST(APPEND MEMORY_TRACKING_SRCS
+         ${Memcached_SOURCE_DIR}/daemon/alloc_hooks_jemalloc.cc
+         ${Memcached_SOURCE_DIR}/daemon/alloc_hooks_tcmalloc.cc
+         ${Memcached_SOURCE_DIR}/daemon/alloc_hooks_whynotboth.cc)
 ELSE ()
     LIST(APPEND MEMORY_TRACKING_SRCS
          ${Memcached_SOURCE_DIR}/daemon/alloc_hooks_dummy.cc)
